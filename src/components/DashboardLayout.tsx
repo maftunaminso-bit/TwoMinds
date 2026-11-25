@@ -4,6 +4,7 @@ import {
   Bot,
   FileDown,
   LayoutDashboard,
+  Link2,
   LogOut,
   Menu,
   Package,
@@ -74,6 +75,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
     },
     { id: 'inventory', label: t.sidebar.inventory, icon: Package },
     { id: 'forecast', label: t.sidebar.forecast, icon: TrendingUp },
+    { id: 'channels', label: t.sidebar.channels, icon: Link2 },
   ];
 
   const currentHeader = t.header.titles[activeTab];

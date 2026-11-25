@@ -1,4 +1,4 @@
-import { Language, ProductCategory } from './types';
+import type { Language, ProductCategory } from './types.ts';
 
 export function formatUZS(amount: number, lang: Language = 'uz'): string {
   const formatted = Math.round(amount)
@@ -153,6 +153,7 @@ export const COPY = {
       salesBot: 'AI Savdo Boti',
       inventory: 'Ombor va Aqlli Narxlar',
       forecast: 'Talab Prognozi',
+      channels: 'Kanallar (TG / IG)',
       backToLanding: 'Landing Sahifaga Qaytish',
       storeName: 'ModaHub Tashkent',
       storeBranch: 'Chilonzor filiali · Faol',
@@ -163,6 +164,7 @@ export const COPY = {
         'sales-bot': { title: 'AI Savdo Boti', sub: "Instagram DM va Telegram murojaatlarini real vaqtda ombor bilan sinxron boshqarish" },
         inventory: { title: 'Ombor va Aqlli Narxlar', sub: "Yagona qoldiq nazorati va 30+ kunlik dead-stock narx optimizatori" },
         forecast: { title: 'Talab Prognozi', sub: "Mavsumiy xarid rejasi, tugash muddati va kerakli aylanma byudjeti" },
+        channels: { title: 'Kanallar va API Integratsiya', sub: "Haqiqiy Telegram Bot va Instagram DM ulanishi hamda tasdiqlangan buyurtmalar" },
       },
     },
     overview: {
@@ -412,6 +414,7 @@ export const COPY = {
       salesBot: 'AI Sales Bot',
       inventory: 'Inventory & Smart Pricing',
       forecast: 'Demand Forecasting',
+      channels: 'Channels (TG / IG)',
       backToLanding: 'Back to Landing Page',
       storeName: 'ModaHub Tashkent',
       storeBranch: 'Chilonzor Branch · Active',
@@ -422,6 +425,7 @@ export const COPY = {
         'sales-bot': { title: 'AI Sales Bot', sub: 'Unified Instagram DM & Telegram inbox synced live with warehouse inventory' },
         inventory: { title: 'Inventory & Smart Pricing', sub: 'Unified SKU stock control and 30+ day dead-stock markdown optimizer' },
         forecast: { title: 'Demand Forecasting', sub: 'Seasonal restock planner, stockout runway, and cashflow requirements' },
+        channels: { title: 'Channels & API Integrations', sub: 'Connect live Telegram Bot & Instagram DM webhooks and monitor bot orders' },
       },
     },
     overview: {

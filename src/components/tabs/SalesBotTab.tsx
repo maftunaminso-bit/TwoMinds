@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  AlertCircle,
   ArrowLeft,
   Bot,
   CheckCircle2,
   Instagram,
+  Loader2,
   Package,
   Send,
   ShoppingBag,
@@ -17,7 +19,11 @@ interface SalesBotTabProps {
   activeConversationId: string;
   onSelectConversation: (id: string) => void;
   inventory: InventoryItem[];
-  onSendTestMessage: (conversationId: string, text: string) => void;
+  onSendTestMessage: (
+    conversationId: string,
+    text: string,
+    sendToPlatform?: boolean
+  ) => Promise<void>;
 }
 
 export const SalesBotTab: React.FC<SalesBotTabProps> = ({
@@ -31,6 +37,9 @@ export const SalesBotTab: React.FC<SalesBotTabProps> = ({
   const t = COPY[lang].salesBot;
   const [platformFilter, setPlatformFilter] = useState<'all' | Platform>('all');
   const [draft, setDraft] = useState('');
+  const [isSending, setIsSending] = useState(false);
+  const [sendError, setSendError] = useState('');
+  const [sendToPlatform, setSendToPlatform] = useState(true);
   const [mobileShowChat, setMobileShowChat] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -46,22 +55,43 @@ export const SalesBotTab: React.FC<SalesBotTabProps> = ({
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [activeConv?.messages.length, activeConv?.id, mobileShowChat]);
+  }, [activeConv?.messages.length, activeConv?.id, mobileShowChat, isSending]);
 
   if (!activeConv || !contextProduct) {
     return null;
   }
 
+  const dispatchMessage = async (text: string) => {
+    if (!text.trim() || isSending) return;
+    setSendError('');
+    setIsSending(true);
+    try {
+      await onSendTestMessage(
+        activeConv.id,
+        text.trim(),
+        Boolean(activeConv.externalChatId && sendToPlatform)
+      );
+      setDraft('');
+    } catch (err: unknown) {
+      setSendError(
+        err instanceof Error
+          ? err.message
+          : lang === 'uz'
+          ? 'AI javob olishda xatolik yuz berdi'
+          : 'Failed to generate AI reply'
+      );
+    } finally {
+      setIsSending(false);
+    }
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmed = draft.trim();
-    if (!trimmed) return;
-    onSendTestMessage(activeConv.id, trimmed);
-    setDraft('');
+    void dispatchMessage(draft);
   };
 
   const handleChipClick = (chipText: string) => {
-    onSendTestMessage(activeConv.id, chipText);
+    void dispatchMessage(chipText);
   };
 
   return (
@@ -107,6 +137,7 @@ export const SalesBotTab: React.FC<SalesBotTabProps> = ({
                 type="button"
                 onClick={() => {
                   onSelectConversation(conv.id);
+                  setSendError('');
                   setMobileShowChat(true);
                 }}
                 className={`w-full text-left p-4 transition-colors cursor-pointer ${
@@ -134,9 +165,16 @@ export const SalesBotTab: React.FC<SalesBotTabProps> = ({
                       </span>
                     </div>
                     <div className="min-w-0">
-                      <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">
-                        {conv.customerName}
-                      </p>
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">
+                          {conv.customerName}
+                        </p>
+                        {conv.externalChatId && (
+                          <span className="rounded bg-emerald-100 dark:bg-emerald-950/80 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300 shrink-0">
+                            Live
+                          </span>
+                        )}
+                      </div>
                       <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
                         {conv.handle}
                       </p>
@@ -222,7 +260,7 @@ export const SalesBotTab: React.FC<SalesBotTabProps> = ({
             </div>
           </div>
 
-          {/* Live Stock Context Sync Pill */}
+          {/* Live Stock Context Sync Badge */}
           <div className="flex items-center gap-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2.5 py-1.5 text-xs shrink-0">
             <Package className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
             <span className="hidden sm:inline text-slate-600 dark:text-slate-300">
@@ -260,6 +298,11 @@ export const SalesBotTab: React.FC<SalesBotTabProps> = ({
                   <span className="font-medium">
                     {isAi ? 'SavdoPilot AI' : activeConv.customerName}
                   </span>
+                  {isAi && msg.aiPowered && (
+                    <span className="rounded bg-indigo-50 dark:bg-indigo-950/80 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-600 dark:text-indigo-300">
+                      Gemini AI
+                    </span>
+                  )}
                   <span aria-hidden="true">·</span>
                   <span className="font-mono-num">{msg.timestamp}</span>
                 </div>
@@ -297,12 +340,47 @@ export const SalesBotTab: React.FC<SalesBotTabProps> = ({
               </div>
             );
           })}
+
+          {isSending && (
+            <div className="flex items-center gap-2 text-xs text-indigo-600 dark:text-indigo-400">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <span>
+                {lang === 'uz'
+                  ? 'Gemini AI omborni tekshirib javob yozmoqda...'
+                  : 'Gemini AI is checking live stock and writing reply...'}
+              </span>
+            </div>
+          )}
+
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Interactive Demo Prompt Area */}
-        <div className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 sm:p-4">
-          <div className="mb-2.5 flex items-center gap-1.5 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0">
+        {/* Interactive Prompt & Live Channel Reply Area */}
+        <div className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3 sm:p-4 space-y-2.5">
+          {sendError && (
+            <div className="flex items-center gap-2 rounded-lg border border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/50 px-3 py-2 text-xs text-rose-700 dark:text-rose-300">
+              <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+              <span>{sendError}</span>
+            </div>
+          )}
+
+          {activeConv.externalChatId && (
+            <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={sendToPlatform}
+                onChange={(e) => setSendToPlatform(e.target.checked)}
+                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+              />
+              <span>
+                {lang === 'uz'
+                  ? `AI javobini haqiqiy ${activeConv.platform === 'telegram' ? 'Telegram' : 'Instagram'} mijoziga ham yuborish`
+                  : `Also send AI reply to real ${activeConv.platform === 'telegram' ? 'Telegram' : 'Instagram'} user`}
+              </span>
+            </label>
+          )}
+
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible sm:pb-0">
             <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400 mr-1 whitespace-nowrap shrink-0">
               {t.quickChipsTitle}
             </span>
@@ -310,8 +388,9 @@ export const SalesBotTab: React.FC<SalesBotTabProps> = ({
               <button
                 key={chip}
                 type="button"
+                disabled={isSending}
                 onClick={() => handleChipClick(chip)}
-                className="rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-300 hover:border-indigo-300 dark:hover:border-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 hover:text-indigo-700 dark:hover:text-indigo-300 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                className="rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2.5 py-1 text-xs font-medium text-slate-700 dark:text-slate-300 hover:border-indigo-300 dark:hover:border-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 hover:text-indigo-700 dark:hover:text-indigo-300 disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap shrink-0"
               >
                 {chip}
               </button>
@@ -322,17 +401,22 @@ export const SalesBotTab: React.FC<SalesBotTabProps> = ({
             <input
               type="text"
               value={draft}
+              disabled={isSending}
               onChange={(e) => setDraft(e.target.value)}
               placeholder={t.inputPlaceholder}
-              className="flex-1 min-w-0 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-3 py-2.5 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-600/20"
+              className="flex-1 min-w-0 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-3 py-2.5 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-600/20 disabled:opacity-60"
             />
             <button
               type="submit"
-              disabled={!draft.trim()}
+              disabled={!draft.trim() || isSending}
               className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 sm:px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer whitespace-nowrap shrink-0"
             >
               <span className="hidden sm:inline">{t.sendBtn}</span>
-              <Send className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+              {isSending ? (
+                <Loader2 className="h-4 w-4 sm:h-3.5 sm:w-3.5 animate-spin" />
+              ) : (
+                <Send className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+              )}
             </button>
           </form>
         </div>

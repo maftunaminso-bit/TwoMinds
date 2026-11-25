@@ -38,10 +38,10 @@ interface AdminPageProps {
     plan: PlanTier;
     instagram: boolean;
     telegram: boolean;
-  }) => void;
+  }) => Promise<void>;
   onOpenShopPanel: (shopId: string) => void;
-  onToggleShopStatus: (shopId: string) => void;
-  onChangeShopPlan: (shopId: string, plan: PlanTier) => void;
+  onToggleShopStatus: (shopId: string) => Promise<void>;
+  onChangeShopPlan: (shopId: string, plan: PlanTier) => Promise<void>;
   onLogout: () => void;
   onBackToLanding: () => void;
 }
@@ -73,6 +73,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
   const [instagram, setInstagram] = useState(true);
   const [telegram, setTelegram] = useState(true);
   const [formError, setFormError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   const totalSales = shops.reduce((acc, s) => acc + s.todaySales, 0);
   const totalAiChats = shops.reduce((acc, s) => acc + s.aiResolvedCount, 0);
@@ -90,7 +91,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     return matchesSearch && matchesPlan;
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
 
@@ -115,26 +116,33 @@ export const AdminPage: React.FC<AdminPageProps> = ({
       return;
     }
 
-    onCreateShop({
-      name: name.trim(),
-      branch: branch.trim(),
-      ownerName: ownerName.trim(),
-      ownerEmail: ownerEmail.trim().toLowerCase(),
-      ownerPassword: ownerPassword.trim() || 'shop123',
-      plan,
-      instagram,
-      telegram,
-    });
+    setSubmitting(true);
+    try {
+      await onCreateShop({
+        name: name.trim(),
+        branch: branch.trim(),
+        ownerName: ownerName.trim(),
+        ownerEmail: ownerEmail.trim().toLowerCase(),
+        ownerPassword: ownerPassword.trim() || 'shop123',
+        plan,
+        instagram,
+        telegram,
+      });
 
-    setName('');
-    setBranch('');
-    setOwnerName('');
-    setOwnerEmail('');
-    setOwnerPassword('shop123');
-    setPlan('Biznes');
-    setInstagram(true);
-    setTelegram(true);
-    setShowCreateModal(false);
+      setName('');
+      setBranch('');
+      setOwnerName('');
+      setOwnerEmail('');
+      setOwnerPassword('shop123');
+      setPlan('Biznes');
+      setInstagram(true);
+      setTelegram(true);
+      setShowCreateModal(false);
+    } catch (err: unknown) {
+      setFormError(err instanceof Error ? err.message : 'Failed to create shop');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const AdminSidebar = (
@@ -594,7 +602,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
       {/* Provision New Shop Modal */}
       {showCreateModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4 backdrop-blur-[1px]">
-          <div className="w-full max-w-lg rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6">
+          <div className="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-5 sm:p-6">
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3.5">
               <div>
                 <h3 className="font-display text-base font-bold text-slate-900 dark:text-white">
@@ -747,9 +755,16 @@ export const AdminPage: React.FC<AdminPageProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 cursor-pointer"
+                  disabled={submitting}
+                  className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60 cursor-pointer"
                 >
-                  {lang === 'uz' ? 'Panel Yaratish' : 'Provision Panel'}
+                  {submitting
+                    ? lang === 'uz'
+                      ? 'Saqlanmoqda...'
+                      : 'Provisioning...'
+                    : lang === 'uz'
+                    ? 'Panel Yaratish'
+                    : 'Provision Panel'}
                 </button>
               </div>
             </form>

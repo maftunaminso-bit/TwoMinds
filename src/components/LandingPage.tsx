@@ -10,6 +10,7 @@ import {
   Send,
   TrendingUp,
 } from 'lucide-react';
+import { INITIAL_INVENTORY } from '../data/initialData';
 import { COPY, formatUZS } from '../i18n';
 import { DashboardTab, InventoryItem, Language } from '../types';
 
@@ -35,9 +36,22 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   onSelectPlan,
 }) => {
   const t = COPY[lang];
-  const kurtka = inventory.find((i) => i.id === 'prod-kurtka') || inventory[0];
-  const krossovka = inventory.find((i) => i.id === 'prod-krossovka') || inventory[1];
-  const koylak = inventory.find((i) => i.id === 'prod-koylak') || inventory[2];
+  const kurtka =
+    inventory.find((i) => i.id === 'prod-kurtka') ||
+    inventory[0] ||
+    INITIAL_INVENTORY[0];
+  const krossovka =
+    inventory.find((i) => i.id === 'prod-krossovka') ||
+    inventory[1] ||
+    inventory[0] ||
+    INITIAL_INVENTORY[1];
+  const koylak =
+    inventory.find((i) => i.id === 'prod-koylak') ||
+    inventory.find((i) => i.daysIdle >= 30) ||
+    inventory[2] ||
+    inventory[1] ||
+    inventory[0] ||
+    INITIAL_INVENTORY[2];
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">

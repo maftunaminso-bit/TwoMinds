@@ -1,21 +1,27 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
   Building2,
+  KeyRound,
+  Loader2,
   Lock,
   Mail,
   ShieldCheck,
   Store,
 } from 'lucide-react';
 import { formatUZS } from '../i18n';
-import { AuthSession, Language, ShopWorkspace } from '../types';
+import { AdminAuthStatus, AuthSession, Language, ShopWorkspace } from '../types';
+import { api, type PublicShopSummary } from '../utils/api';
 
 interface LoginPageProps {
   lang: Language;
   onToggleLang: (lang: Language) => void;
-  shops: ShopWorkspace[];
-  onLoginSuccess: (session: AuthSession) => void;
+  shops: PublicShopSummary[];
+  onLoginSuccess: (
+    session: AuthSession,
+    payload: { shop?: ShopWorkspace; shops?: ShopWorkspace[] }
+  ) => void;
   onBackToLanding: () => void;
 }
 
@@ -29,85 +35,71 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   const [roleTab, setRoleTab] = useState<'shop_owner' | 'admin'>('shop_owner');
   const [email, setEmail] = useState('modahub@savdopilot.uz');
   const [password, setPassword] = useState('shop123');
+  const [claimPassword, setClaimPassword] = useState('');
+  const [adminStatus, setAdminStatus] = useState<AdminAuthStatus>({
+    configured: true,
+    source: 'env',
+  });
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    api
+      .getAdminAuthStatus()
+      .then((status) => {
+        if (active) setAdminStatus(status);
+      })
+      .catch(() => {
+        // Ignore background status probe errors
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const handleRoleSwitch = (nextRole: 'shop_owner' | 'admin') => {
     setRoleTab(nextRole);
     setError('');
     if (nextRole === 'admin') {
       setEmail('admin@savdopilot.uz');
-      setPassword('admin123');
+      setPassword('');
     } else {
       const firstActive = shops.find((s) => s.status === 'active') || shops[0];
       setEmail(firstActive?.ownerEmail || 'modahub@savdopilot.uz');
-      setPassword(firstActive?.ownerPassword || 'shop123');
+      setPassword('shop123');
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setLoading(true);
 
-    const cleanEmail = email.trim().toLowerCase();
-    const cleanPassword = password.trim();
-
-    if (cleanEmail === 'admin@savdopilot.uz') {
-      if (cleanPassword !== 'admin123') {
-        setError(
-          lang === 'uz'
-            ? "Admin paroli noto'g'ri (demo parol: admin123)"
-            : 'Incorrect admin password (demo: admin123)'
-        );
+    try {
+      if (roleTab === 'admin' && adminStatus.source === 'unclaimed') {
+        const res = await api.claimAdminPassword(claimPassword);
+        setAdminStatus({ configured: true, source: 'claimed' });
+        onLoginSuccess(res.session, { shops: res.shops });
         return;
       }
-      onLoginSuccess({
-        role: 'admin',
-        name: 'Platform Super Admin',
-        email: 'admin@savdopilot.uz',
-      });
-      return;
-    }
 
-    const matchedShop = shops.find(
-      (s) => s.ownerEmail.toLowerCase() === cleanEmail
-    );
-
-    if (!matchedShop) {
+      const res = await api.login(email, password);
+      onLoginSuccess(res.session, { shop: res.shop, shops: res.shops });
+    } catch (err: unknown) {
       setError(
-        lang === 'uz'
-          ? "Bunday login bilan do'kon topilmadi."
-          : 'No shop account found with this email.'
+        err instanceof Error
+          ? err.message
+          : lang === 'uz'
+          ? 'Kirishda xatolik yuz berdi'
+          : 'Authentication failed'
       );
-      return;
+    } finally {
+      setLoading(false);
     }
-
-    if (matchedShop.ownerPassword !== cleanPassword) {
-      setError(
-        lang === 'uz'
-          ? `Parol noto'g'ri (demo parol: ${matchedShop.ownerPassword})`
-          : `Incorrect password (demo: ${matchedShop.ownerPassword})`
-      );
-      return;
-    }
-
-    if (matchedShop.status === 'paused') {
-      setError(
-        lang === 'uz'
-          ? "Ushbu do'kon paneli admin tomonidan vaqtincha to'xtatilgan."
-          : 'This shop panel is currently paused by the administrator.'
-      );
-      return;
-    }
-
-    onLoginSuccess({
-      role: 'shop_owner',
-      name: matchedShop.ownerName,
-      email: matchedShop.ownerEmail,
-      shopId: matchedShop.id,
-    });
   };
 
-  const handleQuickShopLogin = (shop: ShopWorkspace) => {
+  const handleQuickShopLogin = async (shop: PublicShopSummary) => {
     if (shop.status === 'paused') {
       setError(
         lang === 'uz'
@@ -116,13 +108,19 @@ export const LoginPage: React.FC<LoginPageProps> = ({
       );
       return;
     }
-    onLoginSuccess({
-      role: 'shop_owner',
-      name: shop.ownerName,
-      email: shop.ownerEmail,
-      shopId: shop.id,
-    });
+    setError('');
+    setLoading(true);
+    try {
+      const res = await api.loginDemoShop(shop.id);
+      onLoginSuccess(res.session, { shop: res.shop });
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Demo login failed');
+    } finally {
+      setLoading(false);
+    }
   };
+
+  const isClaimMode = roleTab === 'admin' && adminStatus.source === 'unclaimed';
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col">
@@ -229,46 +227,94 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 </div>
               )}
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  {lang === 'uz' ? 'Login Email' : 'Email Address'}
-                </label>
-                <div className="relative">
-                  <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                  <input
-                    type="email"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="modahub@savdopilot.uz"
-                    className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-9 pr-3 text-sm text-slate-900 focus:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-600/20"
-                  />
-                </div>
-              </div>
+              {isClaimMode ? (
+                <>
+                  <div className="rounded-lg border border-indigo-200 bg-indigo-50/70 p-3.5 text-xs text-indigo-900">
+                    <div className="flex items-center gap-1.5 font-bold mb-1">
+                      <KeyRound className="h-3.5 w-3.5 text-indigo-600" />
+                      <span>
+                        {lang === 'uz'
+                          ? 'Birinchi ishga tushirish: Admin parolini o‘rnating'
+                          : 'First-Run Setup: Claim Super Admin Access'}
+                      </span>
+                    </div>
+                    <p className="text-indigo-800/90 leading-relaxed">
+                      {lang === 'uz'
+                        ? "Super Admin paroli hali belgilanmagan. Kamida 6 belgidan iborat parol kiriting — u serverda xavfsiz xeshlanib saqlanadi."
+                        : 'Set your initial Super Admin password (min 6 characters). It will be hashed and locked on the server.'}
+                    </p>
+                  </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  {lang === 'uz' ? 'Parol' : 'Password'}
-                </label>
-                <div className="relative">
-                  <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                  <input
-                    type="password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-9 pr-3 text-sm text-slate-900 focus:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-600/20"
-                  />
-                </div>
-              </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                      {lang === 'uz'
+                        ? 'Yangi Super Admin paroli'
+                        : 'New Super Admin Password'}
+                    </label>
+                    <div className="relative">
+                      <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="password"
+                        required
+                        minLength={6}
+                        value={claimPassword}
+                        onChange={(e) => setClaimPassword(e.target.value)}
+                        placeholder="Kamida 6 ta belgi..."
+                        className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-9 pr-3 text-sm text-slate-900 focus:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-600/20"
+                      />
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                      {lang === 'uz' ? 'Login Email' : 'Email Address'}
+                    </label>
+                    <div className="relative">
+                      <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="email"
+                        required
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        placeholder="modahub@savdopilot.uz"
+                        className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-9 pr-3 text-sm text-slate-900 focus:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-600/20"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                      {lang === 'uz' ? 'Parol' : 'Password'}
+                    </label>
+                    <div className="relative">
+                      <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="password"
+                        required
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="••••••••"
+                        className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-9 pr-3 text-sm text-slate-900 focus:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-600/20"
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
 
               <button
                 type="submit"
-                className="flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 transition-colors cursor-pointer"
+                disabled={loading}
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60 transition-colors cursor-pointer"
               >
+                {loading && <Loader2 className="h-4 w-4 animate-spin" />}
                 <span>
-                  {roleTab === 'admin'
+                  {isClaimMode
+                    ? lang === 'uz'
+                      ? 'Parolni Saqlash va Admin Panelga Kirish'
+                      : 'Claim Admin & Continue'
+                    : roleTab === 'admin'
                     ? lang === 'uz'
                       ? 'Admin Panelga Kirish'
                       : 'Sign in as Super Admin'
@@ -276,19 +322,14 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                     ? "Do'kon Paneliga Kirish"
                     : 'Sign in to Shop Panel'}
                 </span>
-                <ArrowRight className="h-4 w-4" />
+                {!loading && <ArrowRight className="h-4 w-4" />}
               </button>
             </form>
 
             <div className="mt-5 border-t border-slate-100 pt-4 text-xs text-slate-500 space-y-1">
               <p>
-                <span className="font-semibold text-slate-700">Admin:</span>{' '}
-                <span className="font-mono-num">admin@savdopilot.uz</span> /{' '}
-                <span className="font-mono-num">admin123</span>
-              </p>
-              <p>
                 <span className="font-semibold text-slate-700">
-                  {lang === 'uz' ? "Do'kon:" : 'Shop:'}
+                  {lang === 'uz' ? "Demo Do'kon:" : 'Demo Shop:'}
                 </span>{' '}
                 <span className="font-mono-num">modahub@savdopilot.uz</span> /{' '}
                 <span className="font-mono-num">shop123</span>
@@ -309,7 +350,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
 
           {/* Right: 1-Click Demo Workspace Switcher */}
           <div className="space-y-4 lg:col-span-6">
-            {/* Super Admin Quick Access Card */}
+            {/* Super Admin Console Info Card */}
             <div className="rounded-xl border border-indigo-200 bg-indigo-50/70 p-5">
               <div className="flex items-start justify-between gap-4">
                 <div>
@@ -335,20 +376,14 @@ export const LoginPage: React.FC<LoginPageProps> = ({
               </div>
               <button
                 type="button"
-                onClick={() =>
-                  onLoginSuccess({
-                    role: 'admin',
-                    name: 'Platform Super Admin',
-                    email: 'admin@savdopilot.uz',
-                  })
-                }
+                onClick={() => handleRoleSwitch('admin')}
                 className="mt-4 inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 transition-colors cursor-pointer"
               >
                 <ShieldCheck className="h-3.5 w-3.5" />
                 <span>
                   {lang === 'uz'
-                    ? 'Admin sifatida tezkor kirish'
-                    : 'Quick Login as Super Admin'}
+                    ? 'Super Admin bo‘limiga o‘tish'
+                    : 'Switch to Super Admin Login'}
                 </span>
               </button>
             </div>
@@ -397,6 +432,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
 
                     <button
                       type="button"
+                      disabled={loading}
                       onClick={() => handleQuickShopLogin(shop)}
                       className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors shrink-0 cursor-pointer ${
                         shop.status === 'active'

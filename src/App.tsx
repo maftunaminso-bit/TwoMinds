@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { CheckCircle2, Info, X } from 'lucide-react';
 import { AdminPage } from './components/AdminPage';
 import { DashboardLayout } from './components/DashboardLayout';
 import { LandingPage } from './components/LandingPage';
 import { LoginPage } from './components/LoginPage';
 import { SupportChatbot } from './components/SupportChatbot';
+import { ChannelsTab } from './components/tabs/ChannelsTab';
 import { ForecastTab } from './components/tabs/ForecastTab';
 import { InventoryTab } from './components/tabs/InventoryTab';
 import { OverviewTab } from './components/tabs/OverviewTab';
@@ -14,7 +15,6 @@ import { formatUZS } from './i18n';
 import {
   AppView,
   AuthSession,
-  ChatMessage,
   DashboardTab,
   InventoryItem,
   Language,
@@ -23,7 +23,7 @@ import {
   ThemeMode,
   ToastNotification,
 } from './types';
-import { generateAiBotReply } from './utils/aiResponder';
+import { api, type PublicShopSummary } from './utils/api';
 import { generateShopPdfReport } from './utils/pdfReport';
 
 export default function App() {
@@ -32,8 +32,21 @@ export default function App() {
   const [view, setView] = useState<AppView>('landing');
   const [activeTab, setActiveTab] = useState<DashboardTab>('overview');
 
-  // Multi-tenant shop workspaces
+  // Server-synced workspaces + in-memory session token (never stored in localStorage)
   const [shops, setShops] = useState<ShopWorkspace[]>(INITIAL_SHOPS);
+  const [publicShops, setPublicShops] = useState<PublicShopSummary[]>(
+    INITIAL_SHOPS.map((s) => ({
+      id: s.id,
+      name: s.name,
+      branch: s.branch,
+      ownerName: s.ownerName,
+      ownerEmail: s.ownerEmail,
+      plan: s.plan,
+      status: s.status,
+      todaySales: s.todaySales,
+      aiResolvedCount: s.aiResolvedCount,
+    }))
+  );
   const [session, setSession] = useState<AuthSession | null>(null);
   const [activeShopId, setActiveShopId] = useState<string>(INITIAL_SHOPS[0].id);
   const [activeConversationMap, setActiveConversationMap] = useState<Record<string, string>>({
@@ -51,10 +64,53 @@ export default function App() {
     document.documentElement.classList.toggle('dark', theme === 'dark' && isDashboardSurface);
   }, [theme, view]);
 
+  // Load public shop summaries for Landing / Login quick switcher
+  const refreshPublicShops = useCallback(async () => {
+    try {
+      const data = await api.getPublicShops();
+      if (data.shops.length > 0) {
+        setPublicShops(data.shops);
+      }
+    } catch {
+      // Ignore background fetch error on initial boot
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshPublicShops();
+  }, [refreshPublicShops]);
+
   const activeShop = shops.find((s) => s.id === activeShopId) || shops[0];
 
   const activeConversationId =
     activeConversationMap[activeShop.id] || activeShop.conversations[0]?.id || '';
+
+  const upsertShop = useCallback((updated: ShopWorkspace) => {
+    setShops((prev) => {
+      const exists = prev.some((s) => s.id === updated.id);
+      if (!exists) return [updated, ...prev];
+      return prev.map((s) => (s.id === updated.id ? updated : s));
+    });
+  }, []);
+
+  // Poll active shop workspace every 3s while in Dashboard so real Telegram/Instagram messages appear live
+  const refreshActiveShop = useCallback(async () => {
+    if (!session?.token || !activeShopId) return;
+    try {
+      const data = await api.getShop(activeShopId, session.token);
+      upsertShop(data.shop);
+    } catch {
+      // Keep current state if transient poll fails
+    }
+  }, [session?.token, activeShopId, upsertShop]);
+
+  useEffect(() => {
+    if (view !== 'dashboard' || !session?.token) return;
+    const timer = setInterval(() => {
+      void refreshActiveShop();
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [view, session?.token, refreshActiveShop]);
 
   const pushToast = (
     title: string,
@@ -68,25 +124,56 @@ export default function App() {
     }, 4500);
   };
 
-  const handleOpenDashboard = (tab: DashboardTab = 'overview') => {
+  const ensureDemoSession = async (targetShopId = activeShopId): Promise<AuthSession | null> => {
+    if (session?.token) {
+      if (session.role === 'admin' || session.shopId === targetShopId) {
+        return session;
+      }
+    }
+    try {
+      const res = await api.loginDemoShop(targetShopId);
+      setSession(res.session);
+      upsertShop(res.shop);
+      setActiveShopId(res.shop.id);
+      return res.session;
+    } catch (err: unknown) {
+      pushToast(
+        lang === 'uz' ? 'Server bilan ulanishda xato' : 'Server connection error',
+        err instanceof Error ? err.message : undefined,
+        'warning'
+      );
+      return null;
+    }
+  };
+
+  const handleOpenDashboard = async (tab: DashboardTab = 'overview') => {
     setActiveTab(tab);
     setView('dashboard');
     window.scrollTo({ top: 0, behavior: 'smooth' });
+    await ensureDemoSession(activeShopId);
   };
 
   const handleBackToLanding = () => {
     setView('landing');
+    void refreshPublicShops();
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleOpenLogin = () => {
     setView('login');
+    void refreshPublicShops();
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleLoginSuccess = (nextSession: AuthSession) => {
+  const handleLoginSuccess = (
+    nextSession: AuthSession,
+    payload: { shop?: ShopWorkspace; shops?: ShopWorkspace[] }
+  ) => {
     setSession(nextSession);
     if (nextSession.role === 'admin') {
+      if (payload.shops) {
+        setShops(payload.shops);
+      }
       setView('admin');
       pushToast(
         lang === 'uz' ? 'Super Admin paneliga kirdingiz' : 'Signed in to Super Admin',
@@ -95,20 +182,18 @@ export default function App() {
           : 'You can now provision and manage all shop panels.',
         'info'
       );
-    } else if (nextSession.shopId) {
-      const targetShop = shops.find((s) => s.id === nextSession.shopId);
-      setActiveShopId(nextSession.shopId);
+    } else if (payload.shop) {
+      upsertShop(payload.shop);
+      setActiveShopId(payload.shop.id);
       setActiveTab('overview');
       setView('dashboard');
-      if (targetShop) {
-        pushToast(
-          lang === 'uz'
-            ? `${targetShop.name} paneli ochildi`
-            : `Signed in to ${targetShop.name}`,
-          `${targetShop.branch} · ${targetShop.plan}`,
-          'success'
-        );
-      }
+      pushToast(
+        lang === 'uz'
+          ? `${payload.shop.name} paneli ochildi`
+          : `Signed in to ${payload.shop.name}`,
+        `${payload.shop.branch} · ${payload.shop.plan}`,
+        'success'
+      );
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -116,11 +201,12 @@ export default function App() {
   const handleLogout = () => {
     setSession(null);
     setView('login');
+    void refreshPublicShops();
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Admin Console Handlers
-  const handleCreateShop = (payload: {
+  // Admin Console Handlers (Persisted on Server)
+  const handleCreateShop = async (payload: {
     name: string;
     branch: string;
     ownerName: string;
@@ -130,153 +216,76 @@ export default function App() {
     instagram: boolean;
     telegram: boolean;
   }) => {
-    const newId = `shop-${Date.now()}`;
-    const starterProdId = `${newId}-p1`;
-    const starterDeadId = `${newId}-p2`;
-
-    const newShop: ShopWorkspace = {
-      id: newId,
-      name: payload.name,
-      branch: payload.branch,
-      ownerName: payload.ownerName,
-      ownerEmail: payload.ownerEmail,
-      ownerPassword: payload.ownerPassword,
-      plan: payload.plan,
-      status: 'active',
-      channels: {
-        instagram: payload.instagram,
-        telegram: payload.telegram,
-      },
-      todaySales: 2850000,
-      aiResolvedCount: 18,
-      createdAt: '2026-11-25',
-      inventory: [
-        {
-          id: starterProdId,
-          sku: `${payload.name.slice(0, 2).toUpperCase()}-001`,
-          nameUz: 'Mavsumiy Kurtka (Qora)',
-          nameEn: 'Seasonal Jacket (Black)',
-          category: 'Ustki kiyim',
-          sizes: 'M, L, XL',
-          stock: 4,
-          costPrice: 220000,
-          sellPrice: 360000,
-          daysIdle: 2,
-          dailyVelocity: 1.3,
-          recommendedRestock: 18,
-          keywords: ['kurtka', 'jacket', 'qora', 'black', 'ustki'],
-        },
-        {
-          id: starterDeadId,
-          sku: `${payload.name.slice(0, 2).toUpperCase()}-002`,
-          nameUz: 'Sport Krossovka',
-          nameEn: 'Sport Sneakers',
-          category: 'Oyoq kiyim',
-          sizes: '41, 42, 43',
-          stock: 12,
-          costPrice: 250000,
-          sellPrice: 410000,
-          daysIdle: 33,
-          dailyVelocity: 0.2,
-          recommendedRestock: 0,
-          keywords: ['krossovka', 'sneaker', 'sport', '42'],
-        },
-      ],
-      conversations: [
-        {
-          id: `${newId}-conv1`,
-          customerName: 'Test Mijoz',
-          handle: '@mijoz_demo',
-          initials: 'TM',
-          platform: payload.instagram ? 'instagram' : 'telegram',
-          status: 'ai_replied',
-          lastActive: '14:15',
-          contextProductId: starterProdId,
-          messages: [
-            {
-              id: `${newId}-m1`,
-              sender: 'customer',
-              text: 'Salom, Mavsumiy kurtka L razmer bormi? Narxi qancha?',
-              timestamp: '14:14',
-            },
-            {
-              id: `${newId}-m2`,
-              sender: 'ai',
-              text: "Assalomu alaykum! Ha, Mavsumiy Kurtka (Qora) L razmer omborimizda 4 dona mavjud. Narxi: 360,000 so'm. Rasmiylashtiramizmi?",
-              timestamp: '14:15',
-            },
-          ],
-        },
-      ],
-    };
-
-    setShops((prev) => [newShop, ...prev]);
+    if (!session?.token) throw new Error('Admin authentication required');
+    const res = await api.createAdminShop(payload, session.token);
+    upsertShop(res.shop);
     setActiveConversationMap((prev) => ({
       ...prev,
-      [newId]: newShop.conversations[0].id,
+      [res.shop.id]: res.shop.conversations[0]?.id || '',
     }));
+    void refreshPublicShops();
 
     pushToast(
       lang === 'uz'
-        ? `"${newShop.name}" uchun alohida panel yaratildi`
-        : `Provisioned isolated panel for "${newShop.name}"`,
-      `Login: ${newShop.ownerEmail} · ${newShop.plan}`,
+        ? `"${res.shop.name}" uchun alohida panel yaratildi`
+        : `Provisioned isolated panel for "${res.shop.name}"`,
+      `Login: ${res.shop.ownerEmail} · ${res.shop.plan}`,
       'success'
     );
   };
 
-  const handleOpenShopPanelFromAdmin = (shopId: string) => {
+  const handleOpenShopPanelFromAdmin = async (shopId: string) => {
     setActiveShopId(shopId);
     setActiveTab('overview');
     setView('dashboard');
-    const target = shops.find((s) => s.id === shopId);
-    if (target) {
-      pushToast(
-        lang === 'uz'
-          ? `${target.name} paneliga o'tildi`
-          : `Switched to ${target.name} panel`,
-        `${target.branch} · ${target.plan}`,
-        'info'
-      );
-    }
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
 
-  const handleToggleShopStatus = (shopId: string) => {
-    setShops((prev) =>
-      prev.map((s) =>
-        s.id === shopId
-          ? { ...s, status: s.status === 'active' ? 'paused' : 'active' }
-          : s
-      )
-    );
-    const target = shops.find((s) => s.id === shopId);
-    if (target) {
-      const nextStatus = target.status === 'active' ? 'paused' : 'active';
-      pushToast(
-        lang === 'uz'
-          ? `${target.name} holati: ${nextStatus === 'active' ? 'Faol' : "To'xtatilgan"}`
-          : `${target.name} status: ${nextStatus}`,
-        undefined,
-        'info'
-      );
+    if (session?.token) {
+      try {
+        const res = await api.getShop(shopId, session.token);
+        upsertShop(res.shop);
+        pushToast(
+          lang === 'uz'
+            ? `${res.shop.name} paneliga o'tildi`
+            : `Switched to ${res.shop.name} panel`,
+          `${res.shop.branch} · ${res.shop.plan}`,
+          'info'
+        );
+      } catch (err: unknown) {
+        pushToast('Error', err instanceof Error ? err.message : undefined, 'warning');
+      }
     }
   };
 
-  const handleChangeShopPlan = (shopId: string, nextPlan: PlanTier) => {
-    setShops((prev) =>
-      prev.map((s) => (s.id === shopId ? { ...s, plan: nextPlan } : s))
-    );
+  const handleToggleShopStatus = async (shopId: string) => {
+    if (!session?.token) return;
     const target = shops.find((s) => s.id === shopId);
-    if (target) {
-      pushToast(
-        lang === 'uz'
-          ? `${target.name} tarifi yangilandi`
-          : `${target.name} plan updated`,
-        `${nextPlan}`,
-        'success'
-      );
-    }
+    if (!target) return;
+    const nextStatus = target.status === 'active' ? 'paused' : 'active';
+    const res = await api.updateAdminShop(shopId, { status: nextStatus }, session.token);
+    upsertShop(res.shop);
+    void refreshPublicShops();
+    pushToast(
+      lang === 'uz'
+        ? `${res.shop.name} holati: ${nextStatus === 'active' ? 'Faol' : "To'xtatilgan"}`
+        : `${res.shop.name} status: ${nextStatus}`,
+      undefined,
+      'info'
+    );
+  };
+
+  const handleChangeShopPlan = async (shopId: string, nextPlan: PlanTier) => {
+    if (!session?.token) return;
+    const res = await api.updateAdminShop(shopId, { plan: nextPlan }, session.token);
+    upsertShop(res.shop);
+    void refreshPublicShops();
+    pushToast(
+      lang === 'uz'
+        ? `${res.shop.name} tarifi yangilandi`
+        : `${res.shop.name} plan updated`,
+      `${nextPlan}`,
+      'success'
+    );
   };
 
   const handleSelectPlan = (planName: string) => {
@@ -289,7 +298,7 @@ export default function App() {
         : 'Redirected to the interactive workspace.',
       'info'
     );
-    handleOpenDashboard('overview');
+    void handleOpenDashboard('overview');
   };
 
   const handleInspectDeadStock = (itemId: string) => {
@@ -297,160 +306,163 @@ export default function App() {
     setActiveTab('inventory');
   };
 
-  const handleSendTestMessage = (conversationId: string, text: string) => {
-    const targetConv = activeShop.conversations.find((c) => c.id === conversationId);
-    if (!targetConv) return;
+  const handleSendTestMessage = async (
+    conversationId: string,
+    text: string,
+    sendToPlatform = false
+  ) => {
+    const activeSession = await ensureDemoSession(activeShop.id);
+    if (!activeSession?.token) {
+      throw new Error('Authentication required');
+    }
 
-    const now = new Date();
-    const timestamp = `${String(now.getHours()).padStart(2, '0')}:${String(
-      now.getMinutes()
-    ).padStart(2, '0')}`;
-
-    const customerMsg: ChatMessage = {
-      id: `msg-c-${Date.now()}`,
-      sender: 'customer',
-      text,
-      timestamp,
-    };
-
-    const aiResult = generateAiBotReply(
-      text,
-      activeShop.inventory,
-      targetConv.contextProductId,
-      lang
+    const res = await api.sendBotMessage(
+      activeShop.id,
+      conversationId,
+      { text, lang, sendToPlatform },
+      activeSession.token
     );
+    upsertShop(res.shop);
 
-    const aiMsg: ChatMessage = {
-      id: `msg-ai-${Date.now() + 1}`,
-      sender: 'ai',
-      text: aiResult.replyText,
-      timestamp,
-      orderCreated: aiResult.orderCreated,
-    };
+    if (res.order) {
+      pushToast(
+        lang === 'uz'
+          ? `Yangi buyurtma: ${res.order.orderId}`
+          : `Order Confirmed: ${res.order.orderId}`,
+        lang === 'uz'
+          ? `${res.order.productName} ombordan ayrildi`
+          : `${res.order.productName} deducted from stock`,
+        'success'
+      );
+    }
+  };
 
-    const deductedItem = aiResult.deductStockProductId
-      ? activeShop.inventory.find((i) => i.id === aiResult.deductStockProductId)
-      : undefined;
+  const handleApplyDiscount = async (itemId: string, newPrice: number) => {
+    const activeSession = await ensureDemoSession(activeShop.id);
+    if (!activeSession?.token) return;
 
-    setShops((prev) =>
-      prev.map((shop) => {
-        if (shop.id !== activeShop.id) return shop;
-
-        const nextInventory =
-          aiResult.deductStockProductId && aiResult.orderCreated
-            ? shop.inventory.map((item) =>
-                item.id === aiResult.deductStockProductId
-                  ? { ...item, stock: Math.max(0, item.stock - 1) }
-                  : item
-              )
-            : shop.inventory;
-
-        const nextSales =
-          aiResult.deductStockProductId && aiResult.orderCreated
-            ? shop.todaySales + aiResult.orderCreated.price
-            : shop.todaySales;
-
-        const nextConversations = shop.conversations.map((conv) =>
-          conv.id === conversationId
-            ? {
-                ...conv,
-                contextProductId: aiResult.matchedProductId,
-                lastActive: timestamp,
-                status: aiResult.orderCreated ? ('order_confirmed' as const) : ('ai_replied' as const),
-                messages: [...conv.messages, customerMsg, aiMsg],
-              }
-            : conv
+    try {
+      const res = await api.applyDiscount(activeShop.id, itemId, newPrice, activeSession.token);
+      upsertShop(res.shop);
+      const target = res.shop.inventory.find((i) => i.id === itemId);
+      if (target) {
+        const channelNote = res.broadcast?.sent
+          ? ` · Telegram (${res.broadcast.channel})`
+          : '';
+        pushToast(
+          lang === 'uz'
+            ? `Yangi narx qo‘llandi${channelNote}`
+            : `New price applied${channelNote}`,
+          `${lang === 'uz' ? target.nameUz : target.nameEn} → ${formatUZS(newPrice, lang)}`,
+          'success'
         );
-
-        return {
-          ...shop,
-          inventory: nextInventory,
-          todaySales: nextSales,
-          aiResolvedCount: shop.aiResolvedCount + 1,
-          conversations: nextConversations,
-        };
-      })
-    );
-
-    if (deductedItem && aiResult.orderCreated) {
-      const nextQty = Math.max(0, deductedItem.stock - 1);
-      pushToast(
-        lang === 'uz'
-          ? `Yangi buyurtma: ${aiResult.orderCreated.orderId}`
-          : `Order Confirmed: ${aiResult.orderCreated.orderId}`,
-        lang === 'uz'
-          ? `${deductedItem.nameUz} ombordan ayrildi (${nextQty} dona qoldi)`
-          : `${deductedItem.nameEn} stock updated (${nextQty} remaining)`,
-        'success'
-      );
+      }
+    } catch (err: unknown) {
+      pushToast('Error', err instanceof Error ? err.message : undefined, 'warning');
     }
   };
 
-  const handleApplyDiscount = (itemId: string, newPrice: number) => {
-    const target = activeShop.inventory.find((i) => i.id === itemId);
-
-    setShops((prev) =>
-      prev.map((shop) => {
-        if (shop.id !== activeShop.id) return shop;
-        return {
-          ...shop,
-          inventory: shop.inventory.map((item) =>
-            item.id === itemId
-              ? {
-                  ...item,
-                  originalSellPrice: item.originalSellPrice || item.sellPrice,
-                  sellPrice: newPrice,
-                  discountApplied: true,
-                }
-              : item
-          ),
-        };
-      })
-    );
-
-    if (target) {
-      pushToast(
-        lang === 'uz'
-          ? 'Yangi narx qo‘llandi va Telegram kanalga e’lon qilindi'
-          : 'New price applied & broadcasted to Telegram channel',
-        `${lang === 'uz' ? target.nameUz : target.nameEn} → ${formatUZS(newPrice, lang)}`,
-        'success'
-      );
-    }
-  };
-
-  const handleAddProduct = (
+  const handleAddProduct = async (
     newProd: Omit<
       InventoryItem,
       'id' | 'daysIdle' | 'dailyVelocity' | 'recommendedRestock' | 'keywords'
     >
   ) => {
-    const id = `prod-${Date.now()}`;
-    const keywords = newProd.nameUz
-      .toLowerCase()
-      .split(/\s+/)
-      .filter((w) => w.length >= 2);
+    const activeSession = await ensureDemoSession(activeShop.id);
+    if (!activeSession?.token) return;
 
-    const created: InventoryItem = {
-      ...newProd,
-      id,
-      daysIdle: 0,
-      dailyVelocity: 1.0,
-      recommendedRestock: newProd.stock <= 5 ? 15 : 8,
-      keywords,
-    };
+    try {
+      const res = await api.addProduct(activeShop.id, newProd, activeSession.token);
+      upsertShop(res.shop);
+      pushToast(
+        lang === 'uz' ? "Yangi tovar omborga qo'shildi" : 'New product added to inventory',
+        `${res.item.nameUz} (${res.item.sku}) · ${res.item.stock} ${lang === 'uz' ? 'dona' : 'pcs'}`,
+        'success'
+      );
+    } catch (err: unknown) {
+      pushToast('Error', err instanceof Error ? err.message : undefined, 'warning');
+    }
+  };
 
-    setShops((prev) =>
-      prev.map((shop) =>
-        shop.id === activeShop.id
-          ? { ...shop, inventory: [created, ...shop.inventory] }
-          : shop
-      )
-    );
-
+  const handleConnectTelegram = async (payload: {
+    botToken: string;
+    mode: 'webhook' | 'polling';
+    channelUsername?: string;
+  }) => {
+    const activeSession = await ensureDemoSession(activeShop.id);
+    if (!activeSession?.token) throw new Error('Authentication required');
+    const res = await api.connectTelegram(activeShop.id, payload, activeSession.token);
+    upsertShop(res.shop);
+    const botUser = res.shop.channelIntegrations?.telegram?.botUsername || 'Telegram Bot';
     pushToast(
-      lang === 'uz' ? "Yangi tovar omborga qo'shildi" : 'New product added to inventory',
-      `${created.nameUz} (${created.sku}) · ${created.stock} ${lang === 'uz' ? 'dona' : 'pcs'}`,
+      lang === 'uz' ? `${botUser} muvaffaqiyatli ulandi!` : `${botUser} connected!`,
+      lang === 'uz'
+        ? "Endi Telegramda botga yozilgan xabarlarga Gemini AI avtomatik javob beradi."
+        : 'Gemini AI is now listening for live messages on Telegram.',
+      'success'
+    );
+  };
+
+  const handleDisconnectTelegram = async () => {
+    const activeSession = await ensureDemoSession(activeShop.id);
+    if (!activeSession?.token) return;
+    const res = await api.disconnectTelegram(activeShop.id, activeSession.token);
+    upsertShop(res.shop);
+    pushToast(
+      lang === 'uz' ? 'Telegram bot uzildi' : 'Telegram bot disconnected',
+      undefined,
+      'info'
+    );
+  };
+
+  const handleConnectInstagram = async (payload: {
+    pageId: string;
+    igAccountId: string;
+    igUsername?: string;
+    accessToken: string;
+    verifyToken?: string;
+  }) => {
+    const activeSession = await ensureDemoSession(activeShop.id);
+    if (!activeSession?.token) throw new Error('Authentication required');
+    const res = await api.connectInstagram(activeShop.id, payload, activeSession.token);
+    upsertShop(res.shop);
+    pushToast(
+      lang === 'uz' ? 'Instagram DM API ulandi!' : 'Instagram DM API connected!',
+      res.shop.channelIntegrations?.instagram?.igUsername,
+      'success'
+    );
+  };
+
+  const handleDisconnectInstagram = async () => {
+    const activeSession = await ensureDemoSession(activeShop.id);
+    if (!activeSession?.token) return;
+    const res = await api.disconnectInstagram(activeShop.id, activeSession.token);
+    upsertShop(res.shop);
+    pushToast(
+      lang === 'uz' ? 'Instagram DM uzildi' : 'Instagram DM disconnected',
+      undefined,
+      'info'
+    );
+  };
+
+  const handleTestInstagramWebhook = async (payload: { username?: string; text: string }) => {
+    const activeSession = await ensureDemoSession(activeShop.id);
+    if (!activeSession?.token) throw new Error('Authentication required');
+    const res = await api.testInstagramWebhook(activeShop.id, payload, activeSession.token);
+    upsertShop(res.shop);
+    if (res.shop.conversations[0]) {
+      setActiveConversationMap((prev) => ({
+        ...prev,
+        [res.shop.id]: res.shop.conversations[0].id,
+      }));
+    }
+    pushToast(
+      lang === 'uz'
+        ? 'Instagram Webhook sinovi bajarildi!'
+        : 'Instagram Webhook test processed!',
+      lang === 'uz'
+        ? 'AI Savdo Boti bo‘limida yangi DM javobini ko‘rishingiz mumkin.'
+        : 'Check the AI Sales Bot inbox for the generated DM reply.',
       'success'
     );
   };
@@ -486,7 +498,7 @@ export default function App() {
         <LandingPage
           lang={lang}
           onToggleLang={setLang}
-          onOpenDashboard={handleOpenDashboard}
+          onOpenDashboard={(tab) => void handleOpenDashboard(tab)}
           onOpenLogin={handleOpenLogin}
           todaySales={activeShop.todaySales}
           aiResolvedCount={activeShop.aiResolvedCount}
@@ -499,7 +511,7 @@ export default function App() {
         <LoginPage
           lang={lang}
           onToggleLang={setLang}
-          shops={shops}
+          shops={publicShops}
           onLoginSuccess={handleLoginSuccess}
           onBackToLanding={handleBackToLanding}
         />
@@ -513,7 +525,7 @@ export default function App() {
           onToggleTheme={setTheme}
           shops={shops}
           onCreateShop={handleCreateShop}
-          onOpenShopPanel={handleOpenShopPanelFromAdmin}
+          onOpenShopPanel={(shopId) => void handleOpenShopPanelFromAdmin(shopId)}
           onToggleShopStatus={handleToggleShopStatus}
           onChangeShopPlan={handleChangeShopPlan}
           onLogout={handleLogout}
@@ -574,8 +586,8 @@ export default function App() {
             <InventoryTab
               lang={lang}
               inventory={activeShop.inventory}
-              onApplyDiscount={handleApplyDiscount}
-              onAddProduct={handleAddProduct}
+              onApplyDiscount={(itemId, newPrice) => void handleApplyDiscount(itemId, newPrice)}
+              onAddProduct={(item) => void handleAddProduct(item)}
               preselectedOptimizerId={preselectedOptimizerId}
               onClearPreselectedOptimizer={() => setPreselectedOptimizerId(null)}
             />
@@ -589,6 +601,19 @@ export default function App() {
               onExportReport={handleExportReport}
             />
           )}
+
+          {activeTab === 'channels' && (
+            <ChannelsTab
+              lang={lang}
+              shop={activeShop}
+              onConnectTelegram={handleConnectTelegram}
+              onDisconnectTelegram={handleDisconnectTelegram}
+              onConnectInstagram={handleConnectInstagram}
+              onDisconnectInstagram={handleDisconnectInstagram}
+              onTestInstagramWebhook={handleTestInstagramWebhook}
+              onRefreshShop={refreshActiveShop}
+            />
+          )}
         </DashboardLayout>
       )}
 
@@ -596,6 +621,10 @@ export default function App() {
       <SupportChatbot
         lang={lang}
         onNavigateView={(targetView, targetTab) => {
+          if (targetView === 'dashboard') {
+            void handleOpenDashboard(targetTab || 'overview');
+            return;
+          }
           if (targetTab) setActiveTab(targetTab);
           setView(targetView);
           window.scrollTo({ top: 0, behavior: 'smooth' });
