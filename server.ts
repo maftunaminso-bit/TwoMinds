@@ -208,18 +208,23 @@ async function startServer() {
     });
   });
 
-  // Scoped 1-click demo login for pre-seeded demo shops
+  // Scoped 1-click demo login — strictly limited to the single public demo shop
   app.post('/api/auth/demo', (req: Request, res: Response) => {
     const db = loadDatabase();
     const requestedShopId =
       typeof req.body?.shopId === 'string' ? req.body.shopId.trim() : 'shop-modahub';
-    const shop =
-      db.shops.find((s) => s.id === requestedShopId) ||
-      db.shops.find((s) => s.status === 'active') ||
-      db.shops[0];
+
+    if (requestedShopId !== 'shop-modahub') {
+      res.status(403).json({
+        error: "Faqat bitta Demo do'kon (ModaHub) ochiq. Boshqa do'konlar uchun parol bilan kiring.",
+      });
+      return;
+    }
+
+    const shop = db.shops.find((s) => s.id === 'shop-modahub');
 
     if (!shop) {
-      res.status(404).json({ error: 'No demo shop workspace found.' });
+      res.status(404).json({ error: 'Demo shop workspace not found.' });
       return;
     }
     if (shop.status === 'paused') {

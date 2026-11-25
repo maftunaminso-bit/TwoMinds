@@ -124,14 +124,15 @@ export default function App() {
     }, 4500);
   };
 
-  const ensureDemoSession = async (targetShopId = activeShopId): Promise<AuthSession | null> => {
+  const ensureDemoSession = async (targetShopId = 'shop-modahub'): Promise<AuthSession | null> => {
     if (session?.token) {
       if (session.role === 'admin' || session.shopId === targetShopId) {
         return session;
       }
     }
     try {
-      const res = await api.loginDemoShop(targetShopId);
+      const demoId = 'shop-modahub';
+      const res = await api.loginDemoShop(demoId);
       setSession(res.session);
       upsertShop(res.shop);
       setActiveShopId(res.shop.id);
@@ -147,10 +148,14 @@ export default function App() {
   };
 
   const handleOpenDashboard = async (tab: DashboardTab = 'overview') => {
+    const targetShopId = session?.token ? activeShopId : 'shop-modahub';
+    if (!session?.token) {
+      setActiveShopId('shop-modahub');
+    }
     setActiveTab(tab);
     setView('dashboard');
     window.scrollTo({ top: 0, behavior: 'smooth' });
-    await ensureDemoSession(activeShopId);
+    await ensureDemoSession(targetShopId);
   };
 
   const handleBackToLanding = () => {
@@ -200,6 +205,7 @@ export default function App() {
 
   const handleLogout = () => {
     setSession(null);
+    setActiveShopId(INITIAL_SHOPS[0].id);
     setView('login');
     void refreshPublicShops();
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -492,6 +498,9 @@ export default function App() {
   const currentUserEmail =
     session?.role === 'admin' ? 'admin@savdopilot.uz' : activeShop.ownerEmail;
 
+  const landingDemoShop =
+    shops.find((s) => s.id === INITIAL_SHOPS[0].id) || activeShop;
+
   return (
     <>
       {view === 'landing' && (
@@ -500,9 +509,9 @@ export default function App() {
           onToggleLang={setLang}
           onOpenDashboard={(tab) => void handleOpenDashboard(tab)}
           onOpenLogin={handleOpenLogin}
-          todaySales={activeShop.todaySales}
-          aiResolvedCount={activeShop.aiResolvedCount}
-          inventory={activeShop.inventory}
+          todaySales={landingDemoShop.todaySales}
+          aiResolvedCount={landingDemoShop.aiResolvedCount}
+          inventory={landingDemoShop.inventory}
           onSelectPlan={handleSelectPlan}
         />
       )}

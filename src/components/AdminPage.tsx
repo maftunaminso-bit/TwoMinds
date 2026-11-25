@@ -583,18 +583,34 @@ export const AdminPage: React.FC<AdminPageProps> = ({
 
         {/* Admin Page Footer */}
         <footer className="border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 py-4 sm:px-6 lg:px-8 transition-colors">
-          <div className="mx-auto flex max-w-7xl flex-col items-start justify-between gap-2 sm:flex-row sm:items-center text-xs text-slate-500 dark:text-slate-400">
+          <div className="mx-auto flex max-w-7xl flex-col items-start justify-between gap-2.5 sm:flex-row sm:items-center text-xs text-slate-500 dark:text-slate-400">
             <p>© 2026 SavdoPilot · Super Admin</p>
-            <a
-              href="mailto:nigmatullayevamaftuna22@gmail.com"
-              className="inline-flex items-center gap-1.5 font-medium text-indigo-600 dark:text-indigo-400 hover:underline underline-offset-4"
-            >
-              <Mail className="h-3.5 w-3.5 shrink-0" />
-              <span>
-                Texnik yordam uchun:{' '}
-                <span className="font-mono-num">nigmatullayevamaftuna22@gmail.com</span>
-              </span>
-            </a>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+              <a
+                href="https://t.me/Nigmatullayeva_22"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-mono-num font-medium text-sky-600 dark:text-sky-400 hover:underline underline-offset-4"
+              >
+                Telegram: @Nigmatullayeva_22
+              </a>
+              <a
+                href="tel:+998915672107"
+                className="font-mono-num font-medium text-slate-700 dark:text-slate-300 hover:underline underline-offset-4"
+              >
+                Tel: +998 91 567 21 07
+              </a>
+              <a
+                href="mailto:nigmatullayevamaftuna22@gmail.com"
+                className="inline-flex items-center gap-1.5 font-medium text-indigo-600 dark:text-indigo-400 hover:underline underline-offset-4"
+              >
+                <Mail className="h-3.5 w-3.5 shrink-0" />
+                <span>
+                  Texnik yordam uchun:{' '}
+                  <span className="font-mono-num">nigmatullayevamaftuna22@gmail.com</span>
+                </span>
+              </a>
+            </div>
           </div>
         </footer>
       </div>

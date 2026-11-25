@@ -6,6 +6,8 @@ import {
   LogOut,
   Mail,
   Moon,
+  Phone,
+  Send,
   ShieldCheck,
   Sun,
 } from 'lucide-react';
@@ -205,14 +207,30 @@ export const UserProfileMenu: React.FC<UserProfileMenuProps> = ({
             </button>
           </div>
 
-          {/* Technical Support Contact */}
-          <div className="mt-1.5 border-t border-slate-100 dark:border-slate-800 px-2.5 pt-2.5 pb-1.5">
+          {/* Technical Support & Subscription Contact */}
+          <div className="mt-1.5 border-t border-slate-100 dark:border-slate-800 px-2.5 pt-2.5 pb-1.5 space-y-1">
             <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
-              Texnik yordam uchun:
+              {lang === 'uz' ? 'Texnik yordam / Obuna:' : 'Support & Subscriptions:'}
             </p>
             <a
+              href="https://t.me/Nigmatullayeva_22"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 font-mono-num text-[11px] font-semibold text-sky-600 dark:text-sky-400 hover:underline"
+            >
+              <Send className="h-3.5 w-3.5 shrink-0" />
+              <span>@Nigmatullayeva_22</span>
+            </a>
+            <a
+              href="tel:+998915672107"
+              className="flex items-center gap-1.5 font-mono-num text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 hover:underline"
+            >
+              <Phone className="h-3.5 w-3.5 shrink-0" />
+              <span>+998 91 567 21 07</span>
+            </a>
+            <a
               href="mailto:nigmatullayevamaftuna22@gmail.com"
-              className="mt-1 inline-flex items-center gap-1.5 font-mono-num text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline break-all"
+              className="flex items-center gap-1.5 font-mono-num text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline break-all"
             >
               <Mail className="h-3.5 w-3.5 shrink-0" />
               <span>nigmatullayevamaftuna22@gmail.com</span>

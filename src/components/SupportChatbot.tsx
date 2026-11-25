@@ -5,6 +5,7 @@ import {
   Check,
   Mail,
   MessageSquare,
+  Phone,
   Send,
   X,
 } from 'lucide-react';
@@ -27,6 +28,8 @@ interface BotChatItem {
 }
 
 const ADMIN_EMAIL = 'nigmatullayevamaftuna22@gmail.com';
+const TELEGRAM_HANDLE = '@Nigmatullayeva_22';
+const PHONE_NUMBER = '+998 91 567 21 07';
 
 export const SupportChatbot: React.FC<SupportChatbotProps> = ({
   lang,
@@ -79,12 +82,12 @@ export const SupportChatbot: React.FC<SupportChatbotProps> = ({
       };
     }
 
-    if (/\b(admin|bog'lan|boglan|aloqa|email|pochta|gmail|maftuna|contact|support|help)\b/i.test(q)) {
+    if (/\b(admin|bog'lan|boglan|aloqa|email|pochta|gmail|maftuna|contact|support|help|obuna|sotib|telefon|nomer|raqam)\b/i.test(q)) {
       return {
         text:
           lang === 'uz'
-            ? `SavdoPilot admini bilan bevosita bog'lanish uchun quyidagi elektron pochta manziliga yozishingiz mumkin:`
-            : 'You can reach the SavdoPilot administrator directly via email:',
+            ? `Obuna sotib olish, yangi do'kon paneli ochish yoki texnik yordam uchun bevosita bog'laning:`
+            : 'Contact us directly to purchase a subscription, activate a shop workspace, or get support:',
         showEmail: true,
       };
     }
@@ -93,8 +96,9 @@ export const SupportChatbot: React.FC<SupportChatbotProps> = ({
       return {
         text:
           lang === 'uz'
-            ? "Tariflarimiz:\n• Start: Bepul (1 kanal, 50 ta SKU)\n• Biznes: 149,000 so'm/oy (IG + TG, 500 SKU, Dead-stock AI)\n• Pro: 349,000 so'm/oy (Cheksiz SKU, ko'p filialli ombor, 30 kunlik prognoz)"
-            : 'Our plans:\n• Start: Free (1 channel, 50 SKUs)\n• Biznes: 149,000 UZS/mo (IG + TG, 500 SKUs, Dead-stock AI)\n• Pro: 349,000 UZS/mo (Unlimited SKUs, multi-branch, 30-day forecast)',
+            ? "Tariflarimiz:\n• Start: Bepul (1 kanal, 50 ta SKU)\n• Biznes: 149,000 so'm/oy (IG + TG, 500 SKU, Dead-stock AI)\n• Pro: 349,000 so'm/oy (Cheksiz SKU, ko'p filialli ombor, 30 kunlik prognoz)\n\nObuna sotib olish uchun Telegram, telefon yoki email orqali bog'laning:"
+            : 'Our plans:\n• Start: Free (1 channel, 50 SKUs)\n• Biznes: 149,000 UZS/mo (IG + TG, 500 SKUs, Dead-stock AI)\n• Pro: 349,000 UZS/mo (Unlimited SKUs, multi-branch, 30-day forecast)\n\nContact us via Telegram, phone, or email to subscribe:',
+        showEmail: true,
       };
     }
 
@@ -102,8 +106,9 @@ export const SupportChatbot: React.FC<SupportChatbotProps> = ({
       return {
         text:
           lang === 'uz'
-            ? "Demo kirish ma'lumotlari:\n• Super Admin: admin@savdopilot.uz / admin123\n• Do'kon paneli: modahub@savdopilot.uz / shop123\nAdmin panelda yangi do'konlar uchun alohida panellar ajratishingiz mumkin."
-            : 'Demo credentials:\n• Super Admin: admin@savdopilot.uz / admin123\n• Shop Owner: modahub@savdopilot.uz / shop123\nInside Admin you can provision separate panels for new shops.',
+            ? "Xavfsizlik maqsadida faqat bitta do'kon (ModaHub Tashkent) ochiq Demo sifatida ishlaydi. Boshqa barcha do'kon panellari va Super Admin bo'limi shaxsiy parol bilan himoyalangan. Shaxsiy do'kon paneli olish uchun murojaat qiling:"
+            : 'For security, only ModaHub Tashkent is available as the single public Demo. All other shop panels and Super Admin require a private password. Contact us to activate your own shop panel:',
+        showEmail: true,
         action: {
           label: lang === 'uz' ? 'Kirish sahifasiga o‘tish' : 'Go to Login Page',
           onClick: () => {
@@ -133,8 +138,8 @@ export const SupportChatbot: React.FC<SupportChatbotProps> = ({
     return {
       text:
         lang === 'uz'
-          ? "Savolingiz uchun rahmat! Quyidagi tezkor bo'limlardan birini tanlashingiz yoki adminimizga nigmatullayevamaftuna22@gmail.com orqali murojaat qilishingiz mumkin."
-          : 'Thanks for reaching out! Pick a quick topic below, explore the live demo, or email our admin at nigmatullayevamaftuna22@gmail.com.',
+          ? "Savolingiz uchun rahmat! Quyidagi tezkor bo'limlardan birini tanlashingiz yoki biz bilan bevosita bog'lanishingiz mumkin:"
+          : 'Thanks for reaching out! Pick a quick topic below or contact our team directly:',
       showEmail: true,
     };
   };
@@ -213,26 +218,44 @@ export const SupportChatbot: React.FC<SupportChatbotProps> = ({
                   {msg.text}
 
                   {msg.showEmail && (
-                    <div className="mt-2.5 flex items-center justify-between gap-2 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50/70 dark:bg-indigo-950/50 px-2.5 py-2">
+                    <div className="mt-2.5 space-y-1.5 rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50/70 dark:bg-indigo-950/50 p-2.5">
                       <a
-                        href={`mailto:${ADMIN_EMAIL}`}
-                        className="inline-flex items-center gap-1.5 font-mono-num text-[11px] font-semibold text-indigo-700 dark:text-indigo-300 hover:underline truncate"
+                        href="https://t.me/Nigmatullayeva_22"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-1.5 font-mono-num text-[11px] font-semibold text-sky-700 dark:text-sky-300 hover:underline"
                       >
-                        <Mail className="h-3.5 w-3.5 shrink-0" />
-                        <span className="truncate">{ADMIN_EMAIL}</span>
+                        <Send className="h-3.5 w-3.5 shrink-0" />
+                        <span>{TELEGRAM_HANDLE}</span>
                       </a>
-                      <button
-                        type="button"
-                        onClick={handleCopyEmail}
-                        className="rounded p-1 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 cursor-pointer shrink-0"
-                        title={lang === 'uz' ? 'Nusxa olish' : 'Copy email'}
+                      <a
+                        href="tel:+998915672107"
+                        className="flex items-center gap-1.5 font-mono-num text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 hover:underline"
                       >
-                        {copied ? (
-                          <Check className="h-3.5 w-3.5 text-emerald-600" />
-                        ) : (
-                          <Copy className="h-3.5 w-3.5" />
-                        )}
-                      </button>
+                        <Phone className="h-3.5 w-3.5 shrink-0" />
+                        <span>{PHONE_NUMBER}</span>
+                      </a>
+                      <div className="flex items-center justify-between gap-2">
+                        <a
+                          href={`mailto:${ADMIN_EMAIL}`}
+                          className="inline-flex items-center gap-1.5 font-mono-num text-[11px] font-semibold text-indigo-700 dark:text-indigo-300 hover:underline truncate"
+                        >
+                          <Mail className="h-3.5 w-3.5 shrink-0" />
+                          <span className="truncate">{ADMIN_EMAIL}</span>
+                        </a>
+                        <button
+                          type="button"
+                          onClick={handleCopyEmail}
+                          className="rounded p-1 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 cursor-pointer shrink-0"
+                          title={lang === 'uz' ? 'Nusxa olish' : 'Copy email'}
+                        >
+                          {copied ? (
+                            <Check className="h-3.5 w-3.5 text-emerald-600" />
+                          ) : (
+                            <Copy className="h-3.5 w-3.5" />
+                          )}
+                        </button>
+                      </div>
                     </div>
                   )}
 

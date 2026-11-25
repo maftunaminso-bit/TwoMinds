@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -7,6 +7,8 @@ import {
   Loader2,
   Lock,
   Mail,
+  Phone,
+  Send,
   ShieldCheck,
   Store,
 } from 'lucide-react';
@@ -25,6 +27,8 @@ interface LoginPageProps {
   onBackToLanding: () => void;
 }
 
+const DEMO_SHOP_ID = 'shop-modahub';
+
 export const LoginPage: React.FC<LoginPageProps> = ({
   lang,
   onToggleLang,
@@ -42,6 +46,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [hint, setHint] = useState('');
+  const passwordInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let active = true;
@@ -61,12 +67,12 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   const handleRoleSwitch = (nextRole: 'shop_owner' | 'admin') => {
     setRoleTab(nextRole);
     setError('');
+    setHint('');
     if (nextRole === 'admin') {
       setEmail('admin@savdopilot.uz');
       setPassword('');
     } else {
-      const firstActive = shops.find((s) => s.status === 'active') || shops[0];
-      setEmail(firstActive?.ownerEmail || 'modahub@savdopilot.uz');
+      setEmail('modahub@savdopilot.uz');
       setPassword('shop123');
     }
   };
@@ -74,6 +80,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setHint('');
     setLoading(true);
 
     try {
@@ -99,7 +106,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({
     }
   };
 
-  const handleQuickShopLogin = async (shop: PublicShopSummary) => {
+  const handleSelectShopPanel = async (shop: PublicShopSummary) => {
+    setError('');
+    setHint('');
+
     if (shop.status === 'paused') {
       setError(
         lang === 'uz'
@@ -108,16 +118,33 @@ export const LoginPage: React.FC<LoginPageProps> = ({
       );
       return;
     }
-    setError('');
-    setLoading(true);
-    try {
-      const res = await api.loginDemoShop(shop.id);
-      onLoginSuccess(res.session, { shop: res.shop });
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Demo login failed');
-    } finally {
-      setLoading(false);
+
+    // Only the single designated demo workspace opens directly without typing password
+    if (shop.id === DEMO_SHOP_ID) {
+      setLoading(true);
+      try {
+        const res = await api.loginDemoShop(shop.id);
+        onLoginSuccess(res.session, { shop: res.shop });
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : 'Demo login failed');
+      } finally {
+        setLoading(false);
+      }
+      return;
     }
+
+    // All other shop panels require entering their password
+    setRoleTab('shop_owner');
+    setEmail(shop.ownerEmail);
+    setPassword('');
+    setHint(
+      lang === 'uz'
+        ? `"${shop.name}" paneliga kirish uchun parolni kiriting.`
+        : `Enter the password for "${shop.name}" to sign in.`
+    );
+    setTimeout(() => {
+      passwordInputRef.current?.focus();
+    }, 50);
   };
 
   const isClaimMode = roleTab === 'admin' && adminStatus.source === 'unclaimed';
@@ -227,6 +254,12 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 </div>
               )}
 
+              {hint && !error && (
+                <div className="rounded-lg border border-indigo-200 bg-indigo-50 px-3.5 py-2.5 text-xs font-medium text-indigo-800">
+                  {hint}
+                </div>
+              )}
+
               {isClaimMode ? (
                 <>
                   <div className="rounded-lg border border-indigo-200 bg-indigo-50/70 p-3.5 text-xs text-indigo-900">
@@ -291,6 +324,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                     <div className="relative">
                       <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                       <input
+                        ref={passwordInputRef}
                         type="password"
                         required
                         value={password}
@@ -326,29 +360,51 @@ export const LoginPage: React.FC<LoginPageProps> = ({
               </button>
             </form>
 
-            <div className="mt-5 border-t border-slate-100 pt-4 text-xs text-slate-500 space-y-1">
+            <div className="mt-5 border-t border-slate-100 pt-4 text-xs text-slate-500 space-y-2">
               <p>
                 <span className="font-semibold text-slate-700">
-                  {lang === 'uz' ? "Demo Do'kon:" : 'Demo Shop:'}
+                  {lang === 'uz' ? 'Yagona ochiq Demo:' : 'Public Demo:'}
                 </span>{' '}
                 <span className="font-mono-num">modahub@savdopilot.uz</span> /{' '}
                 <span className="font-mono-num">shop123</span>
               </p>
-              <p className="pt-1">
-                <span className="font-semibold text-slate-700">
-                  {lang === 'uz' ? "Admin bilan bog'lanish:" : 'Contact Admin:'}
-                </span>{' '}
-                <a
-                  href="mailto:nigmatullayevamaftuna22@gmail.com"
-                  className="font-mono-num text-indigo-600 hover:underline break-all"
-                >
-                  nigmatullayevamaftuna22@gmail.com
-                </a>
-              </p>
+
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-1.5">
+                <p className="font-semibold text-slate-800">
+                  {lang === 'uz'
+                    ? "Obuna sotib olish va bog'lanish:"
+                    : 'Buy Subscription & Contact:'}
+                </p>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                  <a
+                    href="https://t.me/Nigmatullayeva_22"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 font-mono-num text-indigo-600 hover:underline"
+                  >
+                    <Send className="h-3 w-3 shrink-0" />
+                    <span>@Nigmatullayeva_22</span>
+                  </a>
+                  <a
+                    href="tel:+998915672107"
+                    className="inline-flex items-center gap-1 font-mono-num text-indigo-600 hover:underline"
+                  >
+                    <Phone className="h-3 w-3 shrink-0" />
+                    <span>+998 91 567 21 07</span>
+                  </a>
+                  <a
+                    href="mailto:nigmatullayevamaftuna22@gmail.com"
+                    className="inline-flex items-center gap-1 font-mono-num text-indigo-600 hover:underline break-all"
+                  >
+                    <Mail className="h-3 w-3 shrink-0" />
+                    <span>nigmatullayevamaftuna22@gmail.com</span>
+                  </a>
+                </div>
+              </div>
             </div>
           </div>
 
-          {/* Right: 1-Click Demo Workspace Switcher */}
+          {/* Right: Single Demo + Password-Protected Shop Panels */}
           <div className="space-y-4 lg:col-span-6">
             {/* Super Admin Console Info Card */}
             <div className="rounded-xl border border-indigo-200 bg-indigo-50/70 p-5">
@@ -369,8 +425,8 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                   </h2>
                   <p className="mt-1 text-xs leading-relaxed text-slate-600">
                     {lang === 'uz'
-                      ? "Yangi do'kon yaratish, login/parol berish, tarif belgilash va istalgan do'kon paneliga kirib tekshirish."
-                      : 'Create new retail shops, assign login credentials & plans, and launch any store workspace.'}
+                      ? "Yangi do'kon yaratish, login/parol berish, tarif belgilash va istalgan do'kon panelini boshqarish."
+                      : 'Create new retail shops, assign login credentials & plans, and manage store workspaces.'}
                   </p>
                 </div>
               </div>
@@ -391,68 +447,96 @@ export const LoginPage: React.FC<LoginPageProps> = ({
             {/* Individual Shop Panels List */}
             <div className="rounded-xl border border-slate-200 bg-white p-5">
               <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-3">
-                <h3 className="font-display text-sm font-bold text-slate-900">
-                  {lang === 'uz'
-                    ? "Mavjud Do'kon Panellari (Tezkor kirish)"
-                    : 'Provisioned Shop Panels (Quick Access)'}
-                </h3>
-                <span className="font-mono-num text-xs text-slate-500">
+                <div>
+                  <h3 className="font-display text-sm font-bold text-slate-900">
+                    {lang === 'uz'
+                      ? "Do'kon Panellari"
+                      : 'Shop Panels'}
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    {lang === 'uz'
+                      ? "Faqat ModaHub Demo ochiq. Boshqa do'konlar uchun parol talab qilinadi."
+                      : 'Only ModaHub Demo opens directly. All other shop panels require a password.'}
+                  </p>
+                </div>
+                <span className="font-mono-num text-xs text-slate-500 shrink-0">
                   {shops.length} {lang === 'uz' ? 'ta' : 'shops'}
                 </span>
               </div>
 
               <div className="space-y-2.5">
-                {shops.map((shop) => (
-                  <div
-                    key={shop.id}
-                    className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 p-3 hover:bg-slate-50 transition-colors"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-700">
-                        <Building2 className="h-4 w-4" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <p className="text-sm font-semibold text-slate-900 truncate">
-                            {shop.name}
-                          </p>
-                          <span className="text-[11px] font-semibold text-indigo-700">
-                            {shop.plan}
-                          </span>
-                        </div>
-                        <p className="text-xs text-slate-500 truncate">
-                          <span className="font-mono-num">{shop.ownerEmail}</span>
-                          <span className="mx-1.5" aria-hidden="true">·</span>
-                          <span className="font-mono-num">
-                            {formatUZS(shop.todaySales, lang)}
-                          </span>
-                        </p>
-                      </div>
-                    </div>
-
-                    <button
-                      type="button"
-                      disabled={loading}
-                      onClick={() => handleQuickShopLogin(shop)}
-                      className={`inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors shrink-0 cursor-pointer ${
-                        shop.status === 'active'
-                          ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100'
-                          : 'bg-slate-100 text-slate-400 border border-slate-200'
-                      }`}
+                {shops.map((shop) => {
+                  const isPublicDemo = shop.id === DEMO_SHOP_ID;
+                  return (
+                    <div
+                      key={shop.id}
+                      className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 p-3 hover:bg-slate-50 transition-colors"
                     >
-                      <span>
-                        {shop.status === 'active'
-                          ? lang === 'uz'
-                            ? 'Kirish'
-                            : 'Open'
-                          : lang === 'uz'
-                          ? "To'xtatilgan"
-                          : 'Paused'}
-                      </span>
-                      <ArrowRight className="h-3 w-3" />
-                    </button>
-                  </div>
-                ))}
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-700">
+                          <Building2 className="h-4 w-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-semibold text-slate-900 truncate">
+                              {shop.name}
+                            </p>
+                            <span className="text-[11px] font-semibold text-indigo-700">
+                              {shop.plan}
+                            </span>
+                            {isPublicDemo && (
+                              <span className="rounded bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
+                                Demo
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-500 truncate">
+                            <span className="font-mono-num">{shop.ownerEmail}</span>
+                            {isPublicDemo && (
+                              <>
+                                <span className="mx-1.5" aria-hidden="true">·</span>
+                                <span className="font-mono-num">
+                                  {formatUZS(shop.todaySales, lang)}
+                                </span>
+                              </>
+                            )}
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        disabled={loading}
+                        onClick={() => handleSelectShopPanel(shop)}
+                        className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors shrink-0 cursor-pointer ${
+                          shop.status !== 'active'
+                            ? 'bg-slate-100 text-slate-400 border border-slate-200'
+                            : isPublicDemo
+                            ? 'bg-indigo-600 text-white hover:bg-indigo-700'
+                            : 'bg-slate-100 text-slate-700 border border-slate-200 hover:bg-slate-200'
+                        }`}
+                      >
+                        {!isPublicDemo && shop.status === 'active' && (
+                          <Lock className="h-3 w-3" />
+                        )}
+                        <span>
+                          {shop.status !== 'active'
+                            ? lang === 'uz'
+                              ? "To'xtatilgan"
+                              : 'Paused'
+                            : isPublicDemo
+                            ? lang === 'uz'
+                              ? 'Demo Kirish'
+                              : 'Open Demo'
+                            : lang === 'uz'
+                            ? 'Parol bilan'
+                            : 'Password'}
+                        </span>
+                        {isPublicDemo && <ArrowRight className="h-3 w-3" />}
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>
