@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Copy,
   Check,
+  Loader2,
   Mail,
   MessageSquare,
   Phone,
@@ -9,6 +10,7 @@ import {
   X,
 } from 'lucide-react';
 import { AppView, DashboardTab, Language } from '../types';
+import { api } from '../utils/api';
 import { SavdoPilotLogo } from './SavdoPilotLogo';
 
 interface SupportChatbotProps {
@@ -25,6 +27,7 @@ interface BotChatItem {
     onClick: () => void;
   };
   showEmail?: boolean;
+  isError?: boolean;
 }
 
 const ADMIN_EMAIL = 'nigmatullayevamaftuna22@gmail.com';
@@ -37,6 +40,7 @@ export const SupportChatbot: React.FC<SupportChatbotProps> = ({
 }) => {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
   const [copied, setCopied] = useState(false);
   const [messages, setMessages] = useState<BotChatItem[]>([
     {
@@ -44,8 +48,8 @@ export const SupportChatbot: React.FC<SupportChatbotProps> = ({
       sender: 'bot',
       text:
         lang === 'uz'
-          ? "Assalomu alaykum! Men SavdoPilot yordamchisiman. Tariflar, SKU tushunchasi, AI savdo boti yoki admin bilan bog'lanish bo'yicha savollaringizga javob beraman."
-          : 'Hello! I am the SavdoPilot Assistant. Ask me about pricing plans, what SKU means, multi-shop admin access, or how to contact the admin.',
+          ? "Assalomu alaykum! Men SavdoPilot Gemini AI yordamchisiman. Tariflar, SKU tushunchasi, AI savdo boti yoki admin bilan bog'lanish bo'yicha istalgan savolingizga javob beraman."
+          : 'Hello! I am the SavdoPilot Gemini AI Assistant. Ask me anything about pricing plans, SKUs, integrations, or contacting the admin.',
     },
   ]);
 
@@ -55,7 +59,7 @@ export const SupportChatbot: React.FC<SupportChatbotProps> = ({
     if (open) {
       endRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [messages.length, open]);
+  }, [messages.length, open, isLoading]);
 
   const handleCopyEmail = () => {
     navigator.clipboard?.writeText(ADMIN_EMAIL);
@@ -63,90 +67,42 @@ export const SupportChatbot: React.FC<SupportChatbotProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const buildReply = (query: string): Omit<BotChatItem, 'id' | 'sender'> => {
-    const q = query.toLowerCase();
-
-    if (/\b(sku|artikul|kod|nima bu)\b/i.test(q)) {
+  const resolveSuggestedAction = (
+    route?: 'inventory' | 'sales-bot' | 'login'
+  ): BotChatItem['action'] | undefined => {
+    if (route === 'inventory') {
       return {
-        text:
-          lang === 'uz'
-            ? "SKU (Stock Keeping Unit) — ombordagi har bir alohida mahsulot turi uchun beriladigan noyob hisob kodi (artikul), masalan: SP-JK-01 (Oversize Kurtka). SavdoPilot har bir SKU bo'yicha qoldiq, foyda va tugash muddatini alohida kuzatadi."
-            : 'SKU (Stock Keeping Unit) is the unique inventory tracking code assigned to each distinct product in your warehouse (e.g., SP-JK-01 for Oversize Jacket). SavdoPilot tracks stock, margin, and stockout runway per SKU.',
-        action: {
-          label: lang === 'uz' ? 'Ombor jadvalini ko‘rish' : 'View Inventory Table',
-          onClick: () => {
-            onNavigateView('dashboard', 'inventory');
-            setOpen(false);
-          },
+        label: lang === 'uz' ? 'Ombor jadvalini ko‘rish' : 'View Inventory Table',
+        onClick: () => {
+          onNavigateView('dashboard', 'inventory');
+          setOpen(false);
         },
       };
     }
-
-    if (/\b(admin|bog'lan|boglan|aloqa|email|pochta|gmail|maftuna|contact|support|help|obuna|sotib|telefon|nomer|raqam)\b/i.test(q)) {
+    if (route === 'sales-bot') {
       return {
-        text:
-          lang === 'uz'
-            ? `Obuna sotib olish, yangi do'kon paneli ochish yoki texnik yordam uchun bevosita bog'laning:`
-            : 'Contact us directly to purchase a subscription, activate a shop workspace, or get support:',
-        showEmail: true,
-      };
-    }
-
-    if (/\b(narx|tarif|pul|sum|so'm|som|bepul|biznes|pro|price|plan|cost)\b/i.test(q)) {
-      return {
-        text:
-          lang === 'uz'
-            ? "Tariflarimiz:\n• Start: Bepul (1 kanal, 50 ta SKU)\n• Biznes: 149,000 so'm/oy (IG + TG, 500 SKU, Dead-stock AI)\n• Pro: 349,000 so'm/oy (Cheksiz SKU, ko'p filialli ombor, 30 kunlik prognoz)\n\nObuna sotib olish uchun Telegram, telefon yoki email orqali bog'laning:"
-            : 'Our plans:\n• Start: Free (1 channel, 50 SKUs)\n• Biznes: 149,000 UZS/mo (IG + TG, 500 SKUs, Dead-stock AI)\n• Pro: 349,000 UZS/mo (Unlimited SKUs, multi-branch, 30-day forecast)\n\nContact us via Telegram, phone, or email to subscribe:',
-        showEmail: true,
-      };
-    }
-
-    if (/\b(login|kirish|parol|password|panel|do'kon|dokon|account|sign)\b/i.test(q)) {
-      return {
-        text:
-          lang === 'uz'
-            ? "Xavfsizlik maqsadida faqat bitta do'kon (ModaHub Tashkent) ochiq Demo sifatida ishlaydi. Boshqa barcha do'kon panellari va Super Admin bo'limi shaxsiy parol bilan himoyalangan. Shaxsiy do'kon paneli olish uchun murojaat qiling:"
-            : 'For security, only ModaHub Tashkent is available as the single public Demo. All other shop panels and Super Admin require a private password. Contact us to activate your own shop panel:',
-        showEmail: true,
-        action: {
-          label: lang === 'uz' ? 'Kirish sahifasiga o‘tish' : 'Go to Login Page',
-          onClick: () => {
-            onNavigateView('login');
-            setOpen(false);
-          },
+        label: lang === 'uz' ? 'AI Botni sinab ko‘rish' : 'Try AI Sales Bot',
+        onClick: () => {
+          onNavigateView('dashboard', 'sales-bot');
+          setOpen(false);
         },
       };
     }
-
-    if (/\b(instagram|telegram|bot|savdo|demo|ombor|prognoz|dead-stock|chegirma)\b/i.test(q)) {
+    if (route === 'login') {
       return {
-        text:
-          lang === 'uz'
-            ? "SavdoPilot Instagram DM va Telegram Bot murojaatlariga 24/7 o'zbek tilida javob beradi, buyurtma tasdiqlansa ombor qoldig'ini avtomatik kamaytiradi va 30+ kun turib qolgan tovarlarga aqlli chegirma taklif qiladi."
-            : 'SavdoPilot answers Instagram DM & Telegram inquiries 24/7, automatically deducts warehouse stock on confirmed orders, and recommends smart markdowns for 30+ day dead stock.',
-        action: {
-          label: lang === 'uz' ? 'AI Botni sinab ko‘rish' : 'Try AI Sales Bot',
-          onClick: () => {
-            onNavigateView('dashboard', 'sales-bot');
-            setOpen(false);
-          },
+        label: lang === 'uz' ? 'Kirish sahifasiga o‘tish' : 'Go to Login Page',
+        onClick: () => {
+          onNavigateView('login');
+          setOpen(false);
         },
       };
     }
-
-    return {
-      text:
-        lang === 'uz'
-          ? "Savolingiz uchun rahmat! Quyidagi tezkor bo'limlardan birini tanlashingiz yoki biz bilan bevosita bog'lanishingiz mumkin:"
-          : 'Thanks for reaching out! Pick a quick topic below or contact our team directly:',
-      showEmail: true,
-    };
+    return undefined;
   };
 
-  const sendMessage = (text: string) => {
+  const sendMessage = async (text: string) => {
     const trimmed = text.trim();
-    if (!trimmed) return;
+    if (!trimmed || isLoading) return;
 
     const userMsg: BotChatItem = {
       id: `u-${Date.now()}`,
@@ -154,15 +110,40 @@ export const SupportChatbot: React.FC<SupportChatbotProps> = ({
       text: trimmed,
     };
 
-    const reply = buildReply(trimmed);
-    const botMsg: BotChatItem = {
-      id: `b-${Date.now() + 1}`,
-      sender: 'bot',
-      ...reply,
-    };
-
-    setMessages((prev) => [...prev, userMsg, botMsg]);
+    setMessages((prev) => [...prev, userMsg]);
     setInput('');
+    setIsLoading(true);
+
+    try {
+      const res = await api.askPublicAssistant({ question: trimmed, lang });
+      const botMsg: BotChatItem = {
+        id: `b-${Date.now() + 1}`,
+        sender: 'bot',
+        text: res.replyText,
+        showEmail: res.includeContact,
+        action: resolveSuggestedAction(res.suggestedRoute),
+      };
+      setMessages((prev) => [...prev, botMsg]);
+    } catch (err: unknown) {
+      const errMsg =
+        err instanceof Error
+          ? err.message
+          : lang === 'uz'
+          ? "AI yordamchi bilan ulanishda xato yuz berdi."
+          : 'Failed to reach AI assistant.';
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `b-err-${Date.now() + 1}`,
+          sender: 'bot',
+          text: errMsg,
+          showEmail: true,
+          isError: true,
+        },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const quickQuestions =
@@ -210,6 +191,8 @@ export const SupportChatbot: React.FC<SupportChatbotProps> = ({
                   className={`max-w-[85%] rounded-xl px-3.5 py-2.5 text-xs leading-relaxed whitespace-pre-line ${
                     msg.sender === 'user'
                       ? 'bg-indigo-600 text-white'
+                      : msg.isError
+                      ? 'border border-rose-200 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/50 text-rose-800 dark:text-rose-200'
                       : 'border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100'
                   }`}
                 >
@@ -269,6 +252,14 @@ export const SupportChatbot: React.FC<SupportChatbotProps> = ({
                 </div>
               </div>
             ))}
+            {isLoading && (
+              <div className="flex items-center gap-2 text-[11px] text-indigo-600 dark:text-indigo-400">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <span>
+                  {lang === 'uz' ? 'Gemini AI javob yozmoqda...' : 'Gemini AI is thinking...'}
+                </span>
+              </div>
+            )}
             <div ref={endRef} />
           </div>
 
@@ -278,8 +269,9 @@ export const SupportChatbot: React.FC<SupportChatbotProps> = ({
               <button
                 key={q}
                 type="button"
-                onClick={() => sendMessage(q)}
-                className="rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2 py-1 text-[11px] font-medium text-slate-700 dark:text-slate-300 hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-700 dark:hover:text-indigo-300 transition-colors cursor-pointer"
+                disabled={isLoading}
+                onClick={() => void sendMessage(q)}
+                className="rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2 py-1 text-[11px] font-medium text-slate-700 dark:text-slate-300 hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-700 dark:hover:text-indigo-300 disabled:opacity-50 transition-colors cursor-pointer"
               >
                 {q}
               </button>
@@ -290,26 +282,31 @@ export const SupportChatbot: React.FC<SupportChatbotProps> = ({
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              sendMessage(input);
+              void sendMessage(input);
             }}
             className="flex items-center gap-2 border-t border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 p-3"
           >
             <input
               type="text"
               value={input}
+              disabled={isLoading}
               onChange={(e) => setInput(e.target.value)}
               placeholder={
                 lang === 'uz' ? 'Savolingizni yozing...' : 'Ask a question...'
               }
-              className="flex-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-indigo-600 focus:outline-none"
+              className="flex-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-3 py-2 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:border-indigo-600 focus:outline-none disabled:opacity-60"
             />
             <button
               type="submit"
-              disabled={!input.trim()}
+              disabled={!input.trim() || isLoading}
               className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 cursor-pointer shrink-0"
               aria-label="Send message"
             >
-              <Send className="h-3.5 w-3.5" />
+              {isLoading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Send className="h-3.5 w-3.5" />
+              )}
             </button>
           </form>
         </div>

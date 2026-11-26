@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import net from 'net';
 import type {
   ChatMessage,
   Conversation,
@@ -7,7 +8,11 @@ import type {
   ShopOrder,
 } from '../src/types.ts';
 import { formatUZS } from '../src/i18n.ts';
-import { generateGeminiCashierReply } from './aiCashier.ts';
+import {
+  answerOwnerDirectorQuestion,
+  generateGeminiCashierReply,
+  transcribeVoiceAudio,
+} from './aiCashier.ts';
 import { loadDatabase, saveDatabase, type ServerShopRecord } from './store.ts';
 
 function getInitials(name: string): string {
@@ -31,6 +36,42 @@ function nowIsoShort(): string {
   ).padStart(2, '0')} ${nowTimeHHMM()}`;
 }
 
+export function buildRealPaymentUrl(
+  shop: ServerShopRecord,
+  provider: 'Click' | 'Payme',
+  orderId: string,
+  amountUzs: number
+): string | undefined {
+  if (provider === 'Click') {
+    const serviceId =
+      shop.channelSecrets?.click?.serviceId || process.env.CLICK_SERVICE_ID?.trim();
+    const merchantId =
+      shop.channelSecrets?.click?.merchantId || process.env.CLICK_MERCHANT_ID?.trim();
+    if (serviceId && merchantId) {
+      const qs = new URLSearchParams({
+        service_id: serviceId,
+        merchant_id: merchantId,
+        amount: String(Math.round(amountUzs)),
+        transaction_param: orderId,
+      });
+      return `https://my.click.uz/services/pay?${qs.toString()}`;
+    }
+    return undefined;
+  }
+
+  const paymeMerchant =
+    shop.channelSecrets?.payme?.merchantId || process.env.PAYME_MERCHANT_ID?.trim();
+  if (paymeMerchant) {
+    const amountTiyin = Math.round(amountUzs) * 100;
+    const encoded = Buffer.from(
+      `m=${paymeMerchant};ac.order_id=${orderId};a=${amountTiyin}`,
+      'utf8'
+    ).toString('base64');
+    return `https://checkout.paycom.uz/${encoded}`;
+  }
+  return undefined;
+}
+
 export async function processCustomerMessageForShop(params: {
   shop: ServerShopRecord;
   platform: Platform;
@@ -40,13 +81,24 @@ export async function processCustomerMessageForShop(params: {
   handle: string;
   messageText: string;
   preferredLang?: Language;
+  isVoice?: boolean;
+  voiceDuration?: string;
 }): Promise<{
   conversation: Conversation;
   aiMessage: ChatMessage;
   order?: ShopOrder;
 }> {
-  const { shop, platform, externalChatId, conversationId, customerName, handle, messageText } =
-    params;
+  const {
+    shop,
+    platform,
+    externalChatId,
+    conversationId,
+    customerName,
+    handle,
+    messageText,
+    isVoice,
+    voiceDuration,
+  } = params;
   const preferredLang: Language = params.preferredLang || 'uz';
 
   let conv =
@@ -70,6 +122,7 @@ export async function processCustomerMessageForShop(params: {
       status: 'waiting',
       lastActive: nowTimeHHMM(),
       contextProductId: shop.inventory[0]?.id || '',
+      tags: isVoice ? ['Ovozli xabar'] : [],
       messages: [],
     };
     shop.conversations.unshift(conv);
@@ -81,6 +134,13 @@ export async function processCustomerMessageForShop(params: {
     sender: 'customer',
     text: messageText,
     timestamp,
+    ...(isVoice
+      ? {
+          isVoice: true,
+          voiceDuration: voiceDuration || '0:05',
+          voiceTranscript: messageText,
+        }
+      : {}),
   };
 
   const decision = await generateGeminiCashierReply({
@@ -98,6 +158,8 @@ export async function processCustomerMessageForShop(params: {
 
   let createdOrder: ShopOrder | undefined;
   let orderMeta: ChatMessage['orderCreated'] | undefined;
+  let paymentCard: ChatMessage['paymentCard'] | undefined;
+  let deliveryPill: ChatMessage['deliveryPill'] | undefined;
   let finalReplyText = decision.replyText;
 
   if (decision.isOrderConfirmed && matchedItem && matchedItem.stock > 0) {
@@ -105,10 +167,14 @@ export async function processCustomerMessageForShop(params: {
     shop.todaySales += matchedItem.sellPrice;
 
     const orderNum = `SP-${Math.floor(4830 + Math.random() * 5000)}`;
-    const deliveryFee = matchedItem.sellPrice >= 500000 ? 0 : 25000;
+    const deliveryFee = matchedItem.sellPrice >= 500000 ? 0 : 22000;
+    const totalAmount = matchedItem.sellPrice + deliveryFee;
+    const provider = decision.paymentProvider || 'Click';
+    const deliveryAddr = decision.deliveryAddress || 'Chilonzor 5-kvartal';
     const labelWithSize = `${matchedItem.nameUz}${
       decision.requestedSize ? ` · ${decision.requestedSize}` : ''
     }`;
+    const paymentUrl = buildRealPaymentUrl(shop, provider, orderNum, totalAmount);
 
     orderMeta = {
       orderId: orderNum,
@@ -116,6 +182,21 @@ export async function processCustomerMessageForShop(params: {
       price: matchedItem.sellPrice,
       deliveryFee,
       remainingStock: matchedItem.stock,
+    };
+
+    paymentCard = {
+      provider,
+      amount: totalAmount,
+      status: 'pending',
+      paymentUrl,
+      orderId: orderNum,
+    };
+
+    deliveryPill = {
+      provider: 'Yandex Delivery',
+      etaMinutes: 18,
+      address: deliveryAddr,
+      status: 'pending',
     };
 
     createdOrder = {
@@ -128,7 +209,11 @@ export async function processCustomerMessageForShop(params: {
       sku: matchedItem.sku,
       price: matchedItem.sellPrice,
       deliveryFee,
-      address: decision.deliveryAddress,
+      paymentProvider: provider,
+      paymentStatus: 'pending',
+      paymentUrl,
+      deliveryProvider: 'Yandex Delivery',
+      address: deliveryAddr,
       createdAt: nowIsoShort(),
       status: 'confirmed',
     };
@@ -137,7 +222,9 @@ export async function processCustomerMessageForShop(params: {
     shop.orders.unshift(createdOrder);
 
     if (!finalReplyText.includes(orderNum)) {
-      finalReplyText = `${finalReplyText}\n\nBuyurtma raqami: ${orderNum} · Qoldiq: ${matchedItem.stock} dona.`;
+      finalReplyText = `${finalReplyText}\n\nBuyurtma raqami: ${orderNum} · Qoldiq: ${matchedItem.stock} dona.${
+        paymentUrl ? `\n${provider} to'lov havolasi: ${paymentUrl}` : ''
+      }`;
     }
   }
 
@@ -147,6 +234,8 @@ export async function processCustomerMessageForShop(params: {
     text: finalReplyText,
     timestamp: nowTimeHHMM(),
     aiPowered: true,
+    paymentCard,
+    deliveryPill,
     orderCreated: orderMeta,
   };
 
@@ -154,6 +243,14 @@ export async function processCustomerMessageForShop(params: {
   conv.contextProductId = matchedItem?.id || conv.contextProductId;
   conv.lastActive = aiMsg.timestamp;
   conv.status = orderMeta ? 'order_confirmed' : 'ai_replied';
+
+  const existingTags = new Set(conv.tags || []);
+  if (isVoice) existingTags.add('Ovozli xabar');
+  if (paymentCard) {
+    existingTags.add(`${paymentCard.provider} kutilmoqda`);
+  }
+  conv.tags = Array.from(existingTags);
+
   shop.aiResolvedCount += 1;
 
   // Move active conversation to top
@@ -204,6 +301,11 @@ export interface TelegramUpdate {
       last_name?: string;
     };
     text?: string;
+    voice?: {
+      file_id: string;
+      duration?: number;
+      mime_type?: string;
+    };
   };
 }
 
@@ -348,17 +450,56 @@ export async function processTelegramUpdate(
   update: TelegramUpdate
 ): Promise<void> {
   const msg = update.message;
-  if (!msg || !msg.text) return;
+  if (!msg || (!msg.text && !msg.voice)) return;
 
   const botToken = shop.channelSecrets?.telegram?.botToken;
   if (!botToken) return;
 
   const chatId = String(msg.chat.id);
-  const text = msg.text.trim();
-  const fullName = [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(' ') ||
+  const fullName =
+    [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(' ') ||
     msg.chat.first_name ||
     'Telegram Mijoz';
   const handle = msg.from?.username ? `@${msg.from.username}` : `tg:${chatId}`;
+
+  let text = (msg.text || '').trim();
+  let isVoice = false;
+  let voiceDuration: string | undefined;
+
+  if (!text && msg.voice?.file_id) {
+    try {
+      const fileMeta = await telegramApiCall<{ file_path?: string }>(botToken, 'getFile', {
+        file_id: msg.voice.file_id,
+      });
+      if (fileMeta.file_path) {
+        const audioRes = await fetch(
+          `https://api.telegram.org/file/bot${botToken}/${fileMeta.file_path}`
+        );
+        if (audioRes.ok) {
+          const buf = Buffer.from(await audioRes.arrayBuffer());
+          const mime = msg.voice.mime_type || 'audio/ogg';
+          text = await transcribeVoiceAudio({
+            audioBase64: buf.toString('base64'),
+            mimeType: mime,
+            preferredLang: 'uz',
+          });
+          isVoice = true;
+          const sec = Math.max(1, Math.round(msg.voice.duration || 5));
+          voiceDuration = `0:${String(sec).padStart(2, '0')}`;
+        }
+      }
+    } catch (voiceErr: unknown) {
+      console.error(`[Telegram:${shop.id}] Voice transcription failed:`, voiceErr);
+      await sendTelegramMessage(
+        botToken,
+        chatId,
+        "Ovozli xabarni tinglashda muammo yuz berdi. Iltimos, matn ko'rinishida yozib yuboring."
+      );
+      return;
+    }
+  }
+
+  if (!text) return;
 
   if (text === '/start') {
     const topItems = shop.inventory
@@ -367,7 +508,7 @@ export async function processTelegramUpdate(
       .map((i) => `• ${i.nameUz} (${i.sizes}) — ${formatUZS(i.sellPrice, 'uz')} [${i.stock} dona]`)
       .join('\n');
 
-    const welcome = `Assalomu alaykum, ${fullName}! "${shop.name}" (${shop.branch}) AI savdo botiga xush kelibsiz.\n\nOmbordagi mavjud tovarlar:\n${topItems}\n\nQaysi mahsulot yoki razmer bo'yicha yordam bera olaman?`;
+    const welcome = `Assalomu alaykum, ${fullName}! "${shop.name}" (${shop.branch}) AI savdo botiga xush kelibsiz.\n\nOmbordagi mavjud tovarlar:\n${topItems}\n\nQaysi mahsulot yoki razmer bo'yicha yordam bera olaman? Ovozli xabar (golos) yuborishingiz ham mumkin!`;
 
     await sendTelegramMessage(botToken, chatId, welcome);
     if (shop.channelIntegrations?.telegram) {
@@ -376,6 +517,35 @@ export async function processTelegramUpdate(
     }
     await saveDatabase();
     return;
+  }
+
+  if (text.startsWith('/hisobot') || text.startsWith('/report')) {
+    try {
+      const q = text.replace(/^\/(hisobot|report)\s*/i, '').trim() || 'Bugungi savdo, kam qolgan tovarlar va sof foyda hisobotini bering';
+      const ans = await answerOwnerDirectorQuestion({
+        shopName: shop.name,
+        branch: shop.branch,
+        todaySales: shop.todaySales,
+        aiResolvedCount: shop.aiResolvedCount,
+        inventory: shop.inventory,
+        orders: shop.orders || [],
+        question: q,
+        preferredLang: 'uz',
+      });
+      await sendTelegramMessage(
+        botToken,
+        chatId,
+        `📊 ${ans.headline}\n\n${ans.detail}\n\n${ans.metricLabel}: ${ans.metricValue}`
+      );
+      return;
+    } catch (err: unknown) {
+      await sendTelegramMessage(
+        botToken,
+        chatId,
+        `Hisobot olishda xato: ${err instanceof Error ? err.message : String(err)}`
+      );
+      return;
+    }
   }
 
   try {
@@ -387,6 +557,8 @@ export async function processTelegramUpdate(
       handle,
       messageText: text,
       preferredLang: 'uz',
+      isVoice,
+      voiceDuration,
     });
 
     await sendTelegramMessage(botToken, chatId, result.aiMessage.text);
@@ -631,4 +803,159 @@ export async function processInstagramWebhookEntries(
   }
 
   return { processedCount, lastReply };
+}
+
+// ============================================================================
+// YANDEX DELIVERY CARGO API & SSRF-SAFE ERP WEBHOOK SYNC
+// ============================================================================
+
+export function assertSafeHttpsWebhookUrl(rawUrl: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl.trim());
+  } catch {
+    throw new Error("Noto'g'ri Webhook URL formati.");
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error('Faqat HTTPS URL manzillari ruxsat etiladi.');
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    host === '::1' ||
+    host === '0.0.0.0' ||
+    host.endsWith('.local') ||
+    host.endsWith('.internal') ||
+    host === '169.254.169.254'
+  ) {
+    throw new Error("Ichki yoki lokal tarmoq manzillariga so'rov yuborish taqiqlangan.");
+  }
+  if (net.isIP(host)) {
+    const parts = host.split('.').map(Number);
+    const isPrivateV4 =
+      parts[0] === 10 ||
+      parts[0] === 127 ||
+      (parts[0] === 169 && parts[1] === 254) ||
+      (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+      (parts[0] === 192 && parts[1] === 168);
+    if (isPrivateV4 || host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80')) {
+      throw new Error("Xususiy IP manzilga webhook yuborish taqiqlangan.");
+    }
+  }
+  return parsed;
+}
+
+export async function dispatchOrderToYandexOrCourier(params: {
+  shop: ServerShopRecord;
+  order: ShopOrder;
+}): Promise<{ mode: 'yandex_api' | 'local_courier'; claimId: string; note: string }> {
+  const token =
+    params.shop.channelSecrets?.yandex?.apiToken ||
+    process.env.YANDEX_DELIVERY_TOKEN?.trim();
+  const pickupAddr =
+    params.shop.channelSecrets?.yandex?.pickupAddress || `${params.shop.branch}, Tashkent`;
+  const senderPhone = params.shop.channelSecrets?.yandex?.senderPhone || '+998901234567';
+
+  if (!token) {
+    const localId = `LOC-${params.order.orderId}`;
+    return {
+      mode: 'local_courier',
+      claimId: localId,
+      note: "Buyurtma ichki kuryer jo'natmasiga o'tkazildi (Yandex B2B API token kiritilmagan).",
+    };
+  }
+
+  const requestId = `sp_${params.order.orderId}_${Date.now()}`;
+  const res = await fetch(
+    `https://b2b.taxi.yandex.net/b2b/cargo/integration/v2/claims/create?request_id=${encodeURIComponent(
+      requestId
+    )}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        'Accept-Language': 'uz',
+      },
+      body: JSON.stringify({
+        items: [
+          {
+            cost_currency: 'UZS',
+            cost_value: String(params.order.price),
+            droppof_point: 2,
+            pickup_point: 1,
+            quantity: 1,
+            title: params.order.productName,
+            weight: 0.8,
+          },
+        ],
+        route_points: [
+          {
+            point_id: 1,
+            visit_order: 1,
+            type: 'source',
+            address: { fullname: pickupAddr },
+            contact: { name: params.shop.ownerName, phone: senderPhone },
+          },
+          {
+            point_id: 2,
+            visit_order: 2,
+            type: 'destination',
+            address: { fullname: params.order.address || 'Chilonzor, Tashkent' },
+            contact: { name: params.order.customerName, phone: senderPhone },
+          },
+        ],
+      }),
+    }
+  );
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Yandex Delivery Cargo API error (${res.status}): ${errText.slice(0, 180)}`);
+  }
+
+  const data = (await res.json()) as { id?: string };
+  return {
+    mode: 'yandex_api',
+    claimId: data.id || `YND-${params.order.orderId}`,
+    note: 'Yandex Delivery Cargo API orqali haqiqiy kuryer arizasi yaratildi.',
+  };
+}
+
+export async function syncInventoryWithErpWebhook(
+  shop: ServerShopRecord
+): Promise<{ syncedAt: string; status: string }> {
+  const erp = shop.channelSecrets?.erp;
+  if (!erp?.webhookUrl) {
+    throw new Error('ERP Webhook URL sozlanmagan.');
+  }
+  const safeUrl = assertSafeHttpsWebhookUrl(erp.webhookUrl);
+  const res = await fetch(safeUrl.toString(), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-SavdoPilot-Provider': erp.provider,
+      'X-SavdoPilot-Shop': shop.id,
+    },
+    body: JSON.stringify({
+      event: 'inventory.sync',
+      provider: erp.provider,
+      shopId: shop.id,
+      shopName: shop.name,
+      syncedAt: new Date().toISOString(),
+      inventory: shop.inventory,
+      ordersCount: shop.orders?.length || 0,
+    }),
+  });
+
+  if (!res.ok) {
+    throw new Error(`ERP Webhook javob xatosi (${res.status})`);
+  }
+
+  const syncedAt = nowIsoShort();
+  erp.lastSyncAt = syncedAt;
+  erp.lastSyncStatus = `HTTP ${res.status} OK`;
+  await saveDatabase();
+  return { syncedAt, status: erp.lastSyncStatus };
 }

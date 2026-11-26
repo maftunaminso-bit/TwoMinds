@@ -3,12 +3,19 @@ import {
   ArrowRight,
   Bot,
   Check,
+  CheckCircle2,
+  CreditCard,
+  Download,
+  FileSpreadsheet,
   Instagram,
   Layers,
   Mail,
+  Megaphone,
+  Mic,
   PackageCheck,
   Phone,
   Send,
+  Sparkles,
   TrendingUp,
   X,
 } from 'lucide-react';
@@ -21,6 +28,7 @@ interface LandingPageProps {
   lang: Language;
   onToggleLang: (lang: Language) => void;
   onOpenDashboard: (tab?: DashboardTab) => void;
+  onStartInThreeMinutes?: () => void;
   onOpenLogin: () => void;
   todaySales: number;
   aiResolvedCount: number;
@@ -32,6 +40,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
   lang,
   onToggleLang,
   onOpenDashboard,
+  onStartInThreeMinutes,
   onOpenLogin,
   todaySales,
   aiResolvedCount,
@@ -83,10 +92,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               {t.nav.features}
             </a>
             <a
-              href="#qanday-ishlaydi"
+              href="#ustunliklar"
               className="whitespace-nowrap shrink-0 hover:text-slate-900 hover:underline underline-offset-4 transition-colors"
             >
-              {t.nav.howItWorks}
+              {t.nav.advantages}
             </a>
             <a
               href="#narxlar"
@@ -177,10 +186,14 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => onOpenDashboard('sales-bot')}
+                    onClick={() =>
+                      onStartInThreeMinutes
+                        ? onStartInThreeMinutes()
+                        : onOpenDashboard('inventory')
+                    }
                     className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-5 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 focus-visible:ring-offset-2"
                   >
-                    <Bot className="h-4 w-4 text-indigo-600" />
+                    <Sparkles className="h-4 w-4 text-indigo-600" />
                     <span>{t.hero.secondaryCta}</span>
                   </button>
                 </div>
@@ -230,9 +243,25 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                         {aiResolvedCount} {lang === 'uz' ? 'ta' : 'chats'}
                       </p>
                       <p className="mt-1 text-xs font-medium text-indigo-600">
-                        94% {lang === 'uz' ? 'avtomatik AI javob' : 'auto-resolved'}
+                        94% {lang === 'uz' ? 'avtomatik · 32 ovozli' : 'auto · 32 voice'}
                       </p>
                     </div>
+                  </div>
+
+                  {/* Live Voice-to-Order + Click Payment Banner */}
+                  <div className="mb-3 rounded-lg border border-indigo-200 bg-indigo-50/70 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Mic className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
+                      <p className="text-[11px] font-medium text-slate-800 truncate">
+                        {lang === 'uz'
+                          ? 'Ovozli buyurtma (0:06): “Qora oversize kurtka L razmer bormi brat?”'
+                          : 'Voice-to-order (0:06): “Black oversize jacket size L in stock?”'}
+                      </p>
+                    </div>
+                    <span className="inline-flex items-center gap-1 rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800 whitespace-nowrap shrink-0">
+                      <CheckCircle2 className="h-3 w-3" />
+                      Click · 402,000
+                    </span>
                   </div>
 
                   {/* Live Channel Order Sync Feed */}
@@ -246,7 +275,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                       </span>
                     </div>
 
-                    {/* Row 1: Instagram */}
+                    {/* Row 1: Instagram + Click Paid */}
                     <div className="flex items-center justify-between gap-3 px-3.5 py-3">
                       <div className="flex items-center gap-2.5 min-w-0">
                         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-rose-50 text-rose-600 border border-rose-200">
@@ -258,8 +287,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                           </p>
                           <p className="text-[11px] text-slate-500 truncate">
                             {lang === 'uz'
-                              ? 'Instagram DM · Chilonzor 5-kvartal'
-                              : 'Instagram DM · Chilonzor District 5'}
+                              ? "Click to'landi · Yandex Kuryer (18 daqiqa)"
+                              : 'Click Paid · Yandex Courier (18 min)'}
                           </p>
                         </div>
                       </div>
@@ -312,8 +341,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                           </p>
                           <p className="text-[11px] text-slate-500 truncate">
                             {lang === 'uz'
-                              ? 'AI Narx Taklifi · 38 kunlik dead-stock'
-                              : 'AI Markdown Alert · 38 days idle'}
+                              ? 'Avtopilot Marketing · 38 kunlik dead-stock'
+                              : 'Autopilot Marketing · 38 days idle'}
                           </p>
                         </div>
                       </div>
@@ -326,6 +355,75 @@ export const LandingPage: React.FC<LandingPageProps> = ({
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
+        </section>
+
+        {/* Competitive Advantage Cards — Nega aynan SavdoPilot? (4 Cards) */}
+        <section id="ustunliklar" className="border-b border-slate-200 bg-slate-50">
+          <div className="mx-auto max-w-7xl px-4 py-14 sm:px-6 lg:px-8 lg:py-16">
+            <div className="max-w-2xl">
+              <h2 className="font-display text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl text-balance">
+                {t.advantages.heading}
+              </h2>
+              <p className="mt-2.5 text-base text-slate-600">
+                {t.advantages.subheading}
+              </p>
+            </div>
+
+            <div className="mt-8 grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-4">
+              {t.advantages.items.map((adv, idx) => {
+                const AdvIcon =
+                  idx === 0
+                    ? Mic
+                    : idx === 1
+                    ? CreditCard
+                    : idx === 2
+                    ? Megaphone
+                    : FileSpreadsheet;
+                const targetTab: DashboardTab =
+                  idx === 0 ? 'sales-bot' : idx === 1 ? 'channels' : 'inventory';
+                return (
+                  <div
+                    key={adv.index}
+                    className="flex flex-col justify-between rounded-xl border border-slate-200 bg-white p-5 transition-colors hover:border-indigo-300"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600 border border-indigo-100">
+                          <AdvIcon className="h-4 w-4" />
+                        </div>
+                        <span className="font-mono-num text-xs font-semibold text-slate-400">
+                          {adv.index}
+                        </span>
+                      </div>
+                      <h3 className="mt-4 font-display text-base font-bold text-slate-900 leading-snug">
+                        {adv.title}
+                      </h3>
+                      <p className="mt-2 text-xs leading-relaxed text-slate-600">
+                        {adv.desc}
+                      </p>
+                    </div>
+                    <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-semibold text-emerald-700">
+                        {adv.tag}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          idx === 3 && onStartInThreeMinutes
+                            ? onStartInThreeMinutes()
+                            : onOpenDashboard(targetTab)
+                        }
+                        className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:text-indigo-700 cursor-pointer whitespace-nowrap"
+                      >
+                        <span>{lang === 'uz' ? "Ko'rish" : 'Try'}</span>
+                        <ArrowRight className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </section>
@@ -656,6 +754,25 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <span className="text-xs text-slate-500">{t.footer.location}</span>
             </div>
             <p className="mt-1.5 text-xs text-slate-500">{t.footer.tagline}</p>
+            <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+              <a
+                href="/savdopilot-logo.png"
+                download="savdopilot-logo.png"
+                className="inline-flex items-center gap-1 font-medium text-indigo-600 hover:text-indigo-700 hover:underline underline-offset-4"
+              >
+                <Download className="h-3 w-3" />
+                <span>{lang === 'uz' ? 'Logo belgi (.PNG)' : 'Icon Logo (.PNG)'}</span>
+              </a>
+              <span className="text-slate-300" aria-hidden="true">·</span>
+              <a
+                href="/savdopilot-logo-full.png"
+                download="savdopilot-logo-full.png"
+                className="inline-flex items-center gap-1 font-medium text-indigo-600 hover:text-indigo-700 hover:underline underline-offset-4"
+              >
+                <Download className="h-3 w-3" />
+                <span>{lang === 'uz' ? "To'liq logo (.PNG)" : 'Full Wordmark (.PNG)'}</span>
+              </a>
+            </div>
           </div>
           <div className="flex flex-col items-start gap-2 sm:items-end">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">

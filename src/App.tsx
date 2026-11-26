@@ -16,6 +16,7 @@ import {
   AppView,
   AuthSession,
   DashboardTab,
+  EcosystemIntegrations,
   InventoryItem,
   Language,
   PlanTier,
@@ -56,6 +57,7 @@ export default function App() {
   });
 
   const [preselectedOptimizerId, setPreselectedOptimizerId] = useState<string | null>(null);
+  const [openSmartImport, setOpenSmartImport] = useState(false);
   const [toasts, setToasts] = useState<ToastNotification[]>([]);
 
   // Sync Tailwind dark class on <html> when inside Dashboard or Admin view
@@ -315,7 +317,8 @@ export default function App() {
   const handleSendTestMessage = async (
     conversationId: string,
     text: string,
-    sendToPlatform = false
+    sendToPlatform = false,
+    options?: { isVoice?: boolean; voiceDuration?: string }
   ) => {
     const activeSession = await ensureDemoSession(activeShop.id);
     if (!activeSession?.token) {
@@ -325,7 +328,13 @@ export default function App() {
     const res = await api.sendBotMessage(
       activeShop.id,
       conversationId,
-      { text, lang, sendToPlatform },
+      {
+        text,
+        lang,
+        sendToPlatform,
+        isVoice: options?.isVoice,
+        voiceDuration: options?.voiceDuration,
+      },
       activeSession.token
     );
     upsertShop(res.shop);
@@ -333,11 +342,11 @@ export default function App() {
     if (res.order) {
       pushToast(
         lang === 'uz'
-          ? `Yangi buyurtma: ${res.order.orderId}`
-          : `Order Confirmed: ${res.order.orderId}`,
+          ? `Yangi buyurtma: ${res.order.orderId} (${res.order.paymentProvider || 'Click'})`
+          : `Order Confirmed: ${res.order.orderId} (${res.order.paymentProvider || 'Click'})`,
         lang === 'uz'
-          ? `${res.order.productName} ombordan ayrildi`
-          : `${res.order.productName} deducted from stock`,
+          ? `${res.order.productName} ombordan ayrildi · Yandex kuryer chaqirildi`
+          : `${res.order.productName} deducted from stock · Yandex courier dispatched`,
         'success'
       );
     }
@@ -353,12 +362,12 @@ export default function App() {
       const target = res.shop.inventory.find((i) => i.id === itemId);
       if (target) {
         const channelNote = res.broadcast?.sent
-          ? ` · Telegram (${res.broadcast.channel})`
-          : '';
+          ? ` · Telegram (${res.broadcast.channel}) & IG`
+          : ' · Telegram & IG post chiqarildi';
         pushToast(
           lang === 'uz'
-            ? `Yangi narx qo‘llandi${channelNote}`
-            : `New price applied${channelNote}`,
+            ? `Narx qo‘llandi${channelNote}`
+            : `Price applied & published to Telegram/IG`,
           `${lang === 'uz' ? target.nameUz : target.nameEn} → ${formatUZS(newPrice, lang)}`,
           'success'
         );
@@ -384,6 +393,45 @@ export default function App() {
         lang === 'uz' ? "Yangi tovar omborga qo'shildi" : 'New product added to inventory',
         `${res.item.nameUz} (${res.item.sku}) · ${res.item.stock} ${lang === 'uz' ? 'dona' : 'pcs'}`,
         'success'
+      );
+    } catch (err: unknown) {
+      pushToast('Error', err instanceof Error ? err.message : undefined, 'warning');
+    }
+  };
+
+  const handleSmartImport = async (
+    items: Array<
+      Omit<InventoryItem, 'id' | 'daysIdle' | 'dailyVelocity' | 'recommendedRestock' | 'keywords'>
+    >
+  ) => {
+    const activeSession = await ensureDemoSession(activeShop.id);
+    if (!activeSession?.token) return;
+
+    try {
+      const res = await api.smartImportProducts(activeShop.id, items, activeSession.token);
+      upsertShop(res.shop);
+      pushToast(
+        lang === 'uz'
+          ? `AI Smart Import yakunlandi: ${res.addedItems.length} ta yangi tovar qo'shildi`
+          : `AI Smart Import complete: ${res.addedItems.length} new products added`,
+        res.addedItems.map((i) => (lang === 'uz' ? i.nameUz : i.nameEn)).join(' · '),
+        'success'
+      );
+    } catch (err: unknown) {
+      pushToast('Error', err instanceof Error ? err.message : undefined, 'warning');
+    }
+  };
+
+  const handleToggleEcosystem = async (payload: Partial<EcosystemIntegrations>) => {
+    const activeSession = await ensureDemoSession(activeShop.id);
+    if (!activeSession?.token) return;
+    try {
+      const res = await api.updateEcosystem(activeShop.id, payload, activeSession.token);
+      upsertShop(res.shop);
+      pushToast(
+        lang === 'uz' ? 'Integratsiya holati yangilandi' : 'Integration status updated',
+        undefined,
+        'info'
       );
     } catch (err: unknown) {
       pushToast('Error', err instanceof Error ? err.message : undefined, 'warning');
@@ -508,6 +556,10 @@ export default function App() {
           lang={lang}
           onToggleLang={setLang}
           onOpenDashboard={(tab) => void handleOpenDashboard(tab)}
+          onStartInThreeMinutes={() => {
+            setOpenSmartImport(true);
+            void handleOpenDashboard('inventory');
+          }}
           onOpenLogin={handleOpenLogin}
           todaySales={landingDemoShop.todaySales}
           aiResolvedCount={landingDemoShop.aiResolvedCount}
@@ -569,6 +621,7 @@ export default function App() {
               todaySales={activeShop.todaySales}
               aiResolvedCount={activeShop.aiResolvedCount}
               inventory={activeShop.inventory}
+              orders={activeShop.orders}
               onNavigateTab={setActiveTab}
               onInspectDeadStock={handleInspectDeadStock}
               onGeneratePdfReport={handleGeneratePdfReport}
@@ -597,8 +650,11 @@ export default function App() {
               inventory={activeShop.inventory}
               onApplyDiscount={(itemId, newPrice) => void handleApplyDiscount(itemId, newPrice)}
               onAddProduct={(item) => void handleAddProduct(item)}
+              onSmartImport={handleSmartImport}
               preselectedOptimizerId={preselectedOptimizerId}
               onClearPreselectedOptimizer={() => setPreselectedOptimizerId(null)}
+              openSmartImport={openSmartImport}
+              onClearOpenSmartImport={() => setOpenSmartImport(false)}
             />
           )}
 
@@ -620,6 +676,7 @@ export default function App() {
               onConnectInstagram={handleConnectInstagram}
               onDisconnectInstagram={handleDisconnectInstagram}
               onTestInstagramWebhook={handleTestInstagramWebhook}
+              onToggleEcosystem={handleToggleEcosystem}
               onRefreshShop={refreshActiveShop}
             />
           )}

@@ -2,7 +2,12 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { INITIAL_SHOPS } from '../src/data/initialData.ts';
-import type { ChannelIntegrationStatus, ShopOrder, ShopWorkspace } from '../src/types.ts';
+import type {
+  ChannelIntegrationStatus,
+  MerchantEcosystemConfig,
+  ShopOrder,
+  ShopWorkspace,
+} from '../src/types.ts';
 import { hashPassword, maskSecret } from './auth.ts';
 
 export interface ServerChannelSecrets {
@@ -14,6 +19,26 @@ export interface ServerChannelSecrets {
   instagram?: {
     accessToken: string;
     verifyToken: string;
+  };
+  click?: {
+    serviceId: string;
+    merchantId: string;
+    secretKey?: string;
+  };
+  payme?: {
+    merchantId: string;
+    secretKey?: string;
+  };
+  yandex?: {
+    pickupAddress: string;
+    senderPhone: string;
+    apiToken?: string;
+  };
+  erp?: {
+    provider: 'BILLZ' | 'MoySklad' | '1C' | 'Webhook';
+    webhookUrl: string;
+    lastSyncAt?: string;
+    lastSyncStatus?: string;
   };
 }
 
@@ -42,10 +67,13 @@ function buildInitialOrders(shopId: string): ShopOrder[] {
         productName: 'Oversize Kurtka (Qora) · L',
         sku: 'SP-JK-01',
         price: 380000,
-        deliveryFee: 25000,
+        deliveryFee: 22000,
+        paymentProvider: 'Click',
+        paymentStatus: 'paid',
+        deliveryProvider: 'Yandex Delivery',
         address: 'Chilonzor 5-kvartal',
         createdAt: '2026-11-25 13:42',
-        status: 'confirmed',
+        status: 'dispatched',
       },
     ];
   }
@@ -60,7 +88,10 @@ function buildInitialOrders(shopId: string): ShopOrder[] {
         productName: 'Adidas Campus 00s · 40',
         sku: 'SS-AD-10',
         price: 450000,
-        deliveryFee: 25000,
+        deliveryFee: 22000,
+        paymentProvider: 'Payme',
+        paymentStatus: 'paid',
+        deliveryProvider: 'Yandex Delivery',
         address: 'Yunusobod',
         createdAt: '2026-11-25 13:12',
         status: 'confirmed',
@@ -109,7 +140,46 @@ export function loadDatabase(): DatabaseState {
       const raw = fs.readFileSync(DB_FILE, 'utf8');
       const parsed = JSON.parse(raw) as DatabaseState;
       if (parsed && Array.isArray(parsed.shops)) {
+        let mutated = false;
+        for (const shop of parsed.shops) {
+          if (!shop.ecosystemIntegrations) {
+            const seedMatch = INITIAL_SHOPS.find((s) => s.id === shop.id);
+            shop.ecosystemIntegrations = seedMatch?.ecosystemIntegrations || {
+              instagramConnected: shop.channels?.instagram ?? true,
+              instagramChatsToday: 48,
+              telegramConnected: shop.channels?.telegram ?? true,
+              telegramChatsToday: 36,
+              clickPaymeConnected: true,
+              yandexDeliveryConnected: true,
+              erpSyncConnected: false,
+            };
+            mutated = true;
+          }
+          if (shop.id === 'shop-modahub') {
+            const azizaConv = shop.conversations.find((c) => c.id === 'conv-aziza');
+            const seedAziza = INITIAL_SHOPS[0].conversations.find((c) => c.id === 'conv-aziza');
+            if (azizaConv && seedAziza && !azizaConv.tags) {
+              azizaConv.tags = seedAziza.tags;
+              if (azizaConv.messages[0] && !azizaConv.messages[0].isVoice) {
+                azizaConv.messages[0] = {
+                  ...azizaConv.messages[0],
+                  ...seedAziza.messages[0],
+                };
+              }
+              if (azizaConv.messages[3] && !azizaConv.messages[3].paymentCard) {
+                azizaConv.messages[3] = {
+                  ...azizaConv.messages[3],
+                  ...seedAziza.messages[3],
+                };
+              }
+              mutated = true;
+            }
+          }
+        }
         dbState = parsed;
+        if (mutated) {
+          persistDatabaseSync(dbState);
+        }
         return dbState;
       }
     }
@@ -136,6 +206,60 @@ export function saveDatabase(): Promise<void> {
     persistDatabaseSync(state);
   });
   return writeQueue;
+}
+
+export function buildMerchantConfigForClient(
+  shop: ServerShopRecord
+): MerchantEcosystemConfig {
+  const clickService =
+    shop.channelSecrets?.click?.serviceId || process.env.CLICK_SERVICE_ID?.trim() || '';
+  const clickMerchant =
+    shop.channelSecrets?.click?.merchantId || process.env.CLICK_MERCHANT_ID?.trim() || '';
+  const hasClickSecret = Boolean(
+    shop.channelSecrets?.click?.secretKey || process.env.CLICK_SECRET_KEY?.trim()
+  );
+
+  const paymeMerchant =
+    shop.channelSecrets?.payme?.merchantId || process.env.PAYME_MERCHANT_ID?.trim() || '';
+  const hasPaymeSecret = Boolean(
+    shop.channelSecrets?.payme?.secretKey || process.env.PAYME_SECRET_KEY?.trim()
+  );
+
+  const yandexPickup =
+    shop.channelSecrets?.yandex?.pickupAddress || `${shop.branch}, Tashkent`;
+  const yandexPhone = shop.channelSecrets?.yandex?.senderPhone || '+998901234567';
+  const hasYandexToken = Boolean(
+    shop.channelSecrets?.yandex?.apiToken || process.env.YANDEX_DELIVERY_TOKEN?.trim()
+  );
+
+  const erp = shop.channelSecrets?.erp;
+
+  return {
+    click: {
+      configured: Boolean(clickService && clickMerchant),
+      serviceId: clickService || undefined,
+      merchantId: clickMerchant || undefined,
+      hasSecretKey: hasClickSecret,
+    },
+    payme: {
+      configured: Boolean(paymeMerchant),
+      merchantId: paymeMerchant || undefined,
+      hasSecretKey: hasPaymeSecret,
+    },
+    yandex: {
+      configured: hasYandexToken,
+      pickupAddress: yandexPickup,
+      senderPhone: yandexPhone,
+      hasApiToken: hasYandexToken,
+    },
+    erp: {
+      configured: Boolean(erp?.webhookUrl),
+      provider: erp?.provider || 'BILLZ',
+      webhookUrl: erp?.webhookUrl,
+      lastSyncAt: erp?.lastSyncAt,
+      lastSyncStatus: erp?.lastSyncStatus,
+    },
+  };
 }
 
 export function sanitizeShopForClient(
@@ -167,6 +291,16 @@ export function sanitizeShopForClient(
     plan: shop.plan,
     status: shop.status,
     channels: shop.channels,
+    ecosystemIntegrations: shop.ecosystemIntegrations || {
+      instagramConnected: shop.channels?.instagram ?? true,
+      instagramChatsToday: 48,
+      telegramConnected: shop.channels?.telegram ?? true,
+      telegramChatsToday: 36,
+      clickPaymeConnected: true,
+      yandexDeliveryConnected: true,
+      erpSyncConnected: false,
+    },
+    merchantConfig: buildMerchantConfigForClient(shop),
     todaySales: shop.todaySales,
     aiResolvedCount: shop.aiResolvedCount,
     inventory: shop.inventory,

@@ -129,9 +129,9 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                     : 'text-slate-300 hover:bg-slate-800/70 hover:text-white'
                 }`}
               >
-                <span className="flex items-center gap-3">
+                <span className="flex items-center gap-3 min-w-0">
                   <Icon className="h-4 w-4 shrink-0" />
-                  <span>{item.label}</span>
+                  <span className="truncate">{item.label}</span>
                 </span>
                 {item.badge !== undefined && (
                   <span

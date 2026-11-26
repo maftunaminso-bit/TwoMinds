@@ -1,8 +1,11 @@
 import React, { useState } from 'react';
 import {
+  Car,
   Check,
   CheckCircle2,
   Copy,
+  CreditCard,
+  Database,
   Instagram,
   Link2,
   Loader2,
@@ -13,7 +16,7 @@ import {
   Webhook,
 } from 'lucide-react';
 import { formatUZS } from '../../i18n';
-import type { Language, ShopWorkspace } from '../../types';
+import type { EcosystemIntegrations, Language, ShopWorkspace } from '../../types';
 
 interface ChannelsTabProps {
   lang: Language;
@@ -33,6 +36,7 @@ interface ChannelsTabProps {
   }) => Promise<void>;
   onDisconnectInstagram: () => Promise<void>;
   onTestInstagramWebhook: (payload: { username?: string; text: string }) => Promise<void>;
+  onToggleEcosystem?: (payload: Partial<EcosystemIntegrations>) => Promise<void>;
   onRefreshShop: () => Promise<void>;
 }
 
@@ -44,10 +48,20 @@ export const ChannelsTab: React.FC<ChannelsTabProps> = ({
   onConnectInstagram,
   onDisconnectInstagram,
   onTestInstagramWebhook,
+  onToggleEcosystem,
   onRefreshShop,
 }) => {
   const tg = shop.channelIntegrations?.telegram;
   const ig = shop.channelIntegrations?.instagram;
+  const eco = shop.ecosystemIntegrations || {
+    instagramConnected: shop.channels.instagram,
+    instagramChatsToday: 84,
+    telegramConnected: shop.channels.telegram,
+    telegramChatsToday: 64,
+    clickPaymeConnected: true,
+    yandexDeliveryConnected: true,
+    erpSyncConnected: false,
+  };
   const orders = shop.orders || [];
 
   // Telegram form state
@@ -73,6 +87,7 @@ export const ChannelsTab: React.FC<ChannelsTabProps> = ({
   const [testIgLoading, setTestIgLoading] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [togglingKey, setTogglingKey] = useState<string | null>(null);
 
   const originBase =
     typeof window !== 'undefined' ? window.location.origin : '';
@@ -154,6 +169,105 @@ export const ChannelsTab: React.FC<ChannelsTabProps> = ({
     }
   };
 
+  const handleEcoToggle = async (
+    key: keyof Pick<
+      EcosystemIntegrations,
+      | 'instagramConnected'
+      | 'telegramConnected'
+      | 'clickPaymeConnected'
+      | 'yandexDeliveryConnected'
+      | 'erpSyncConnected'
+    >,
+    currentVal: boolean
+  ) => {
+    if (!onToggleEcosystem || togglingKey) return;
+    setTogglingKey(key);
+    try {
+      await onToggleEcosystem({ [key]: !currentVal });
+    } finally {
+      setTogglingKey(null);
+    }
+  };
+
+  const ecosystemCards: Array<{
+    key: keyof Pick<
+      EcosystemIntegrations,
+      | 'instagramConnected'
+      | 'telegramConnected'
+      | 'clickPaymeConnected'
+      | 'yandexDeliveryConnected'
+      | 'erpSyncConnected'
+    >;
+    title: string;
+    connectedText: string;
+    disconnectedText: string;
+    enabled: boolean;
+    icon: React.ComponentType<{ className?: string }>;
+    toneClass: string;
+  }> = [
+    {
+      key: 'instagramConnected',
+      title: 'Instagram Business API',
+      connectedText:
+        lang === 'uz'
+          ? `Ulangan · Bugun ${eco.instagramChatsToday} ta chat`
+          : `Connected · ${eco.instagramChatsToday} chats today`,
+      disconnectedText: lang === 'uz' ? "O'chirilgan" : 'Paused',
+      enabled: eco.instagramConnected,
+      icon: Instagram,
+      toneClass: 'bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 border-rose-200 dark:border-rose-800',
+    },
+    {
+      key: 'telegramConnected',
+      title: 'Telegram Bot API',
+      connectedText:
+        lang === 'uz'
+          ? `Ulangan · Bugun ${eco.telegramChatsToday} ta chat`
+          : `Connected · ${eco.telegramChatsToday} chats today`,
+      disconnectedText: lang === 'uz' ? "O'chirilgan" : 'Paused',
+      enabled: eco.telegramConnected,
+      icon: Send,
+      toneClass: 'bg-sky-50 dark:bg-sky-950/60 text-sky-600 dark:text-sky-400 border-sky-200 dark:border-sky-800',
+    },
+    {
+      key: 'clickPaymeConnected',
+      title: 'Click & Payme Merchant',
+      connectedText:
+        lang === 'uz'
+          ? 'Ulangan · Avto-hisob faol'
+          : 'Connected · Auto-invoice active',
+      disconnectedText: lang === 'uz' ? 'Ulanmagan' : 'Disconnected',
+      enabled: eco.clickPaymeConnected,
+      icon: CreditCard,
+      toneClass: 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800',
+    },
+    {
+      key: 'yandexDeliveryConnected',
+      title: 'Yandex Delivery & BTS Pochta',
+      connectedText:
+        lang === 'uz'
+          ? 'Ulangan · Kuryer avto-chaqiruv faol'
+          : 'Connected · Auto-dispatch active',
+      disconnectedText: lang === 'uz' ? 'Ulanmagan' : 'Disconnected',
+      enabled: eco.yandexDeliveryConnected,
+      icon: Car,
+      toneClass: 'bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-800',
+    },
+    {
+      key: 'erpSyncConnected',
+      title: 'BILLZ / MoySklad Sync',
+      connectedText:
+        lang === 'uz'
+          ? '2-tomonlama ombor sinxron faol'
+          : '2-way stock sync active',
+      disconnectedText:
+        lang === 'uz' ? 'Ixtiyoriy 2-tomonlama sinxron' : 'Optional 2-way sync',
+      enabled: eco.erpSyncConnected,
+      icon: Database,
+      toneClass: 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800',
+    },
+  ];
+
   return (
     <div className="space-y-6">
       {/* Top Info Strip */}
@@ -161,13 +275,13 @@ export const ChannelsTab: React.FC<ChannelsTabProps> = ({
         <div>
           <h2 className="font-display text-base font-bold text-slate-900 dark:text-white">
             {lang === 'uz'
-              ? 'Jonli Telegram va Instagram Integratsiyasi'
-              : 'Live Telegram & Instagram Integrations'}
+              ? '1-Klik Mahalliy Ekotizim va Kanallar'
+              : '1-Click Local Ecosystem & Live Channels'}
           </h2>
           <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
             {lang === 'uz'
-              ? "Haqiqiy @BotFather tokeningizni yoki Meta Instagram Graph API ma'lumotlarini ulang — Gemini AI mijozlarga 24/7 javob berib omborni boshqaradi."
-              : 'Connect your real @BotFather bot or Meta Instagram Messaging API — Gemini AI replies 24/7 and syncs live warehouse inventory.'}
+              ? "Click, Payme, Yandex Delivery, BILLZ/MoySklad hamda haqiqiy Telegram Bot va Instagram API ulanishlarini boshqaring."
+              : 'Toggle local payment, courier & ERP integrations alongside your live Telegram Bot and Instagram Graph API.'}
           </p>
         </div>
 
@@ -180,6 +294,64 @@ export const ChannelsTab: React.FC<ChannelsTabProps> = ({
           <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
           <span>{lang === 'uz' ? 'Holatni yangilash' : 'Sync Status'}</span>
         </button>
+      </div>
+
+      {/* 1-Click Local Ecosystem Grid */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        {ecosystemCards.map((card) => {
+          const CardIcon = card.icon;
+          const isBusy = togglingKey === card.key;
+          return (
+            <div
+              key={card.key}
+              className="flex flex-col justify-between rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-4"
+            >
+              <div>
+                <div className="flex items-center justify-between gap-2">
+                  <span
+                    className={`flex h-9 w-9 items-center justify-center rounded-lg border ${card.toneClass}`}
+                  >
+                    <CardIcon className="h-4 w-4" />
+                  </span>
+
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={card.enabled}
+                    disabled={isBusy}
+                    onClick={() => void handleEcoToggle(card.key, card.enabled)}
+                    className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full transition-colors ${
+                      card.enabled
+                        ? 'bg-emerald-600'
+                        : 'bg-slate-300 dark:bg-slate-700'
+                    }`}
+                    aria-label={card.title}
+                  >
+                    <span
+                      className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+                        card.enabled ? 'translate-x-4.5' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                <h3 className="mt-3 text-sm font-bold text-slate-900 dark:text-white leading-snug">
+                  {card.title}
+                </h3>
+              </div>
+
+              <p
+                className={`mt-2 text-xs font-medium ${
+                  card.enabled
+                    ? 'text-emerald-700 dark:text-emerald-400'
+                    : 'text-slate-500 dark:text-slate-400'
+                }`}
+              >
+                {card.enabled ? card.connectedText : card.disconnectedText}
+              </p>
+            </div>
+          );
+        })}
       </div>
 
       {/* 2-Column Channel Setup Grid */}

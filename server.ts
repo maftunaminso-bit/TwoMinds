@@ -1,10 +1,17 @@
 import 'dotenv/config';
 import crypto from 'crypto';
+import ExcelJS from 'exceljs';
 import express, { type Request, type Response } from 'express';
 import fs from 'fs';
 import path from 'path';
 import {
   AiServiceError,
+  answerOwnerDirectorQuestion,
+  answerPublicAssistantQuestion,
+  generateDeadStockMarketingPlan,
+  generateDemandForecastWithGemini,
+  parseInventoryUploadWithGemini,
+  transcribeVoiceAudio,
 } from './server/aiCashier.ts';
 import {
   hashPassword,
@@ -16,15 +23,18 @@ import {
   type AuthenticatedRequest,
 } from './server/auth.ts';
 import {
+  assertSafeHttpsWebhookUrl,
   broadcastTelegramPromo,
   disconnectInstagram,
   disconnectTelegram,
+  dispatchOrderToYandexOrCourier,
   processCustomerMessageForShop,
   processInstagramWebhookEntries,
   processTelegramUpdate,
   sendInstagramDmReply,
   sendTelegramMessage,
   startTelegramPollingWorker,
+  syncInventoryWithErpWebhook,
   verifyAndConnectInstagram,
   verifyAndConnectTelegram,
   type InstagramWebhookEntry,
@@ -36,7 +46,15 @@ import {
   saveDatabase,
   type ServerShopRecord,
 } from './server/store.ts';
-import type { AuthSession, InventoryItem, Language, PlanTier, ProductCategory } from './src/types.ts';
+import { SAMPLE_AI_IMPORT_PRODUCTS } from './src/data/initialData.ts';
+import type {
+  AuthSession,
+  EcosystemIntegrations,
+  InventoryItem,
+  Language,
+  PlanTier,
+  ProductCategory,
+} from './src/types.ts';
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -62,7 +80,7 @@ async function startServer() {
 
   app.use(
     express.json({
-      limit: '1mb',
+      limit: '15mb',
       verify: (req, _res, buf) => {
         (req as Request & { rawBody?: Buffer }).rawBody = buf;
       },
@@ -93,6 +111,29 @@ async function startServer() {
       aiResolvedCount: s.aiResolvedCount,
     }));
     res.json({ shops: summaries });
+  });
+
+  app.post('/api/public/assistant', async (req: Request, res: Response) => {
+    const question =
+      typeof req.body?.question === 'string' ? req.body.question.trim().slice(0, 400) : '';
+    const lang: Language = req.body?.lang === 'en' ? 'en' : 'uz';
+    if (!question) {
+      res.status(400).json({ error: 'Question is required.' });
+      return;
+    }
+    try {
+      const answer = await answerPublicAssistantQuestion({
+        question,
+        preferredLang: lang,
+      });
+      res.json(answer);
+    } catch (err: unknown) {
+      if (err instanceof AiServiceError) {
+        res.status(err.statusCode).json({ error: err.message, code: err.code });
+        return;
+      }
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
   });
 
   // --------------------------------------------------------------------------
@@ -273,6 +314,9 @@ async function startServer() {
       const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
       const lang: Language = req.body?.lang === 'en' ? 'en' : 'uz';
       const sendToPlatform = Boolean(req.body?.sendToPlatform);
+      const isVoice = Boolean(req.body?.isVoice);
+      const voiceDuration =
+        typeof req.body?.voiceDuration === 'string' ? req.body.voiceDuration.trim() : undefined;
 
       if (!text) {
         res.status(400).json({ error: 'Message text is required' });
@@ -295,6 +339,8 @@ async function startServer() {
           handle: conv.handle,
           messageText: text,
           preferredLang: lang,
+          isVoice,
+          voiceDuration,
         });
 
         // If this conversation is linked to a real external Telegram/Instagram user and sendToPlatform is requested
@@ -330,6 +376,138 @@ async function startServer() {
         }
         const msg = err instanceof Error ? err.message : String(err);
         res.status(500).json({ error: msg });
+      }
+    }
+  );
+
+  app.post(
+    '/api/shops/:shopId/conversations/:convId/voice',
+    requireShopAccess,
+    async (req: AuthenticatedRequest, res: Response) => {
+      const db = loadDatabase();
+      const shop = db.shops.find((s) => s.id === req.params.shopId);
+      if (!shop) {
+        res.status(404).json({ error: 'Shop not found' });
+        return;
+      }
+
+      const conv = shop.conversations.find((c) => c.id === req.params.convId);
+      if (!conv) {
+        res.status(404).json({ error: 'Conversation not found' });
+        return;
+      }
+
+      const audioBase64 =
+        typeof req.body?.audioBase64 === 'string' ? req.body.audioBase64.trim() : '';
+      const mimeType =
+        typeof req.body?.mimeType === 'string' && req.body.mimeType.trim()
+          ? req.body.mimeType.trim()
+          : 'audio/webm';
+      const voiceDuration =
+        typeof req.body?.duration === 'string' && req.body.duration.trim()
+          ? req.body.duration.trim()
+          : '0:05';
+      const lang: Language = req.body?.lang === 'en' ? 'en' : 'uz';
+      const sendToPlatform = Boolean(req.body?.sendToPlatform);
+
+      if (!audioBase64) {
+        res.status(400).json({ error: 'Audio payload is required.' });
+        return;
+      }
+
+      try {
+        const transcript = await transcribeVoiceAudio({
+          audioBase64,
+          mimeType,
+          preferredLang: lang,
+        });
+
+        const result = await processCustomerMessageForShop({
+          shop,
+          platform: conv.platform,
+          conversationId: conv.id,
+          externalChatId: conv.externalChatId,
+          customerName: conv.customerName,
+          handle: conv.handle,
+          messageText: transcript,
+          preferredLang: lang,
+          isVoice: true,
+          voiceDuration,
+        });
+
+        if (sendToPlatform && conv.externalChatId) {
+          if (conv.platform === 'telegram' && shop.channelSecrets?.telegram?.botToken) {
+            await sendTelegramMessage(
+              shop.channelSecrets.telegram.botToken,
+              conv.externalChatId,
+              result.aiMessage.text
+            );
+          } else if (
+            conv.platform === 'instagram' &&
+            shop.channelSecrets?.instagram?.accessToken &&
+            !conv.externalChatId.startsWith('test-ig-')
+          ) {
+            await sendInstagramDmReply(
+              shop.channelSecrets.instagram.accessToken,
+              conv.externalChatId,
+              result.aiMessage.text
+            );
+          }
+        }
+
+        res.json({
+          transcript,
+          shop: sanitizeShopForClient(shop, getRequestBaseUrl(req)),
+          aiMessage: result.aiMessage,
+          order: result.order,
+        });
+      } catch (err: unknown) {
+        if (err instanceof AiServiceError) {
+          res.status(err.statusCode).json({ error: err.message, code: err.code });
+          return;
+        }
+        res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  );
+
+  app.post(
+    '/api/shops/:shopId/owner-assistant',
+    requireShopAccess,
+    async (req: AuthenticatedRequest, res: Response) => {
+      const db = loadDatabase();
+      const shop = db.shops.find((s) => s.id === req.params.shopId);
+      if (!shop) {
+        res.status(404).json({ error: 'Shop not found' });
+        return;
+      }
+
+      const question =
+        typeof req.body?.question === 'string' ? req.body.question.trim().slice(0, 500) : '';
+      const lang: Language = req.body?.lang === 'en' ? 'en' : 'uz';
+      if (!question) {
+        res.status(400).json({ error: 'Question is required.' });
+        return;
+      }
+
+      try {
+        const answer = await answerOwnerDirectorQuestion({
+          shopName: shop.name,
+          branch: shop.branch,
+          todaySales: shop.todaySales,
+          aiResolvedCount: shop.aiResolvedCount,
+          inventory: shop.inventory,
+          orders: shop.orders || [],
+          question,
+          preferredLang: lang,
+        });
+        res.json({ answer });
+      } catch (err: unknown) {
+        if (err instanceof AiServiceError) {
+          res.status(err.statusCode).json({ error: err.message, code: err.code });
+          return;
+        }
+        res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
       }
     }
   );
@@ -418,6 +596,8 @@ async function startServer() {
       }
 
       const newPrice = Number(req.body?.newPrice);
+      const customPromoText =
+        typeof req.body?.promoText === 'string' ? req.body.promoText.trim() : '';
       if (!Number.isFinite(newPrice) || newPrice <= 0) {
         res.status(400).json({ error: 'Valid newPrice is required.' });
         return;
@@ -433,7 +613,9 @@ async function startServer() {
       };
       if (shop.channelIntegrations?.telegram?.connected && shop.channelIntegrations.telegram.channelUsername) {
         try {
-          const promoText = `🔥 Maxsus Chegirma (${shop.name})!\n\n${item.nameUz} (${item.sizes})\nEski narx: ${item.originalSellPrice.toLocaleString()} so'm\nYangi narx: ${item.sellPrice.toLocaleString()} so'm\nQoldiq: ${item.stock} dona\n\nBuyurtma uchun botimizga yozing: ${shop.channelIntegrations.telegram.botUsername || ''}`;
+          const promoText =
+            customPromoText ||
+            `🔥 Maxsus Chegirma (${shop.name})!\n\n${item.nameUz} (${item.sizes})\nEski narx: ${item.originalSellPrice.toLocaleString()} so'm\nYangi narx: ${item.sellPrice.toLocaleString()} so'm\nQoldiq: ${item.stock} dona\n\nBuyurtma uchun botimizga yozing: ${shop.channelIntegrations.telegram.botUsername || ''}`;
           broadcastResult = await broadcastTelegramPromo(shop, promoText);
         } catch (err: unknown) {
           broadcastResult = {
@@ -441,11 +623,532 @@ async function startServer() {
             reason: err instanceof Error ? err.message : String(err),
           };
         }
+      } else {
+        broadcastResult = {
+          sent: false,
+          reason:
+            "Telegram bot yoki aksiya kanali (@username) Integratsiyalar bo'limida ulanmagan.",
+        };
       }
 
       res.json({
         shop: sanitizeShopForClient(shop, getRequestBaseUrl(req)),
         broadcast: broadcastResult,
+      });
+    }
+  );
+
+  app.post(
+    '/api/shops/:shopId/inventory/:itemId/ai-marketing',
+    requireShopAccess,
+    async (req: AuthenticatedRequest, res: Response) => {
+      const db = loadDatabase();
+      const shop = db.shops.find((s) => s.id === req.params.shopId);
+      if (!shop) {
+        res.status(404).json({ error: 'Shop not found' });
+        return;
+      }
+      const item = shop.inventory.find((i) => i.id === req.params.itemId);
+      if (!item) {
+        res.status(404).json({ error: 'Inventory item not found' });
+        return;
+      }
+      try {
+        const plan = await generateDeadStockMarketingPlan({
+          shopName: shop.name,
+          item,
+        });
+        res.json({ plan });
+      } catch (err: unknown) {
+        if (err instanceof AiServiceError) {
+          res.status(err.statusCode).json({ error: err.message, code: err.code });
+          return;
+        }
+        res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  );
+
+  app.post(
+    '/api/shops/:shopId/inventory/smart-parse',
+    requireShopAccess,
+    async (req: AuthenticatedRequest, res: Response) => {
+      const db = loadDatabase();
+      const shop = db.shops.find((s) => s.id === req.params.shopId);
+      if (!shop) {
+        res.status(404).json({ error: 'Shop not found' });
+        return;
+      }
+
+      const fileName =
+        typeof req.body?.fileName === 'string' ? req.body.fileName.trim() : 'upload';
+      const mimeType =
+        typeof req.body?.mimeType === 'string' ? req.body.mimeType.trim() : '';
+      const fileBase64 =
+        typeof req.body?.fileBase64 === 'string' ? req.body.fileBase64.trim() : '';
+      const textContent =
+        typeof req.body?.textContent === 'string' ? req.body.textContent.trim() : '';
+
+      try {
+        let parsedItems;
+        if (mimeType.startsWith('image/') && fileBase64) {
+          parsedItems = await parseInventoryUploadWithGemini({
+            fileName,
+            mimeType,
+            imageBase64: fileBase64,
+          });
+        } else if (
+          fileName.toLowerCase().endsWith('.xlsx') ||
+          mimeType.includes('spreadsheetml')
+        ) {
+          if (!fileBase64) {
+            res.status(400).json({ error: 'Excel file content is required.' });
+            return;
+          }
+          const workbook = new ExcelJS.Workbook();
+          const buf = Buffer.from(fileBase64, 'base64');
+          await workbook.xlsx.load(buf as unknown as ArrayBuffer);
+          const lines: string[] = [];
+          workbook.eachSheet((sheet) => {
+            lines.push(`--- Sheet: ${sheet.name} ---`);
+            sheet.eachRow((row) => {
+              const vals = Array.isArray(row.values)
+                ? row.values
+                    .slice(1)
+                    .map((v) =>
+                      v && typeof v === 'object' && 'text' in v
+                        ? String((v as { text: unknown }).text)
+                        : String(v ?? '')
+                    )
+                : [];
+              if (vals.some((v) => v.trim() !== '')) {
+                lines.push(vals.join(' | '));
+              }
+            });
+          });
+          parsedItems = await parseInventoryUploadWithGemini({
+            fileName,
+            mimeType: 'text/plain',
+            spreadsheetText: lines.join('\n'),
+          });
+        } else {
+          const decodedText =
+            textContent ||
+            (fileBase64 ? Buffer.from(fileBase64, 'base64').toString('utf8') : '');
+          if (!decodedText.trim()) {
+            res.status(400).json({ error: 'Unsupported or empty file content.' });
+            return;
+          }
+          parsedItems = await parseInventoryUploadWithGemini({
+            fileName,
+            mimeType: mimeType || 'text/csv',
+            spreadsheetText: decodedText,
+          });
+        }
+
+        res.json({ items: parsedItems });
+      } catch (err: unknown) {
+        if (err instanceof AiServiceError) {
+          res.status(err.statusCode).json({ error: err.message, code: err.code });
+          return;
+        }
+        res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  );
+
+  app.post(
+    '/api/shops/:shopId/inventory/restock',
+    requireShopAccess,
+    async (req: AuthenticatedRequest, res: Response) => {
+      const db = loadDatabase();
+      const shop = db.shops.find((s) => s.id === req.params.shopId);
+      if (!shop) {
+        res.status(404).json({ error: 'Shop not found' });
+        return;
+      }
+
+      const items = Array.isArray(req.body?.items) ? req.body.items : [];
+      if (items.length === 0) {
+        res.status(400).json({ error: 'At least one restock item is required.' });
+        return;
+      }
+
+      let totalUnitsAdded = 0;
+      for (const entry of items) {
+        const target = shop.inventory.find((i) => i.id === entry?.itemId);
+        const addQty = Math.floor(Number(entry?.addQty) || 0);
+        if (target && addQty > 0 && addQty <= 10000) {
+          target.stock += addQty;
+          target.recommendedRestock = Math.max(0, target.recommendedRestock - addQty);
+          totalUnitsAdded += addQty;
+        }
+      }
+
+      if (totalUnitsAdded === 0) {
+        res.status(400).json({ error: 'No valid restock quantities provided.' });
+        return;
+      }
+
+      await saveDatabase();
+      res.json({
+        totalUnitsAdded,
+        shop: sanitizeShopForClient(shop, getRequestBaseUrl(req)),
+      });
+    }
+  );
+
+  app.post(
+    '/api/shops/:shopId/forecast/analyze',
+    requireShopAccess,
+    async (req: AuthenticatedRequest, res: Response) => {
+      const db = loadDatabase();
+      const shop = db.shops.find((s) => s.id === req.params.shopId);
+      if (!shop) {
+        res.status(404).json({ error: 'Shop not found' });
+        return;
+      }
+      const rawTf = Number(req.body?.timeframe);
+      const timeframe: 7 | 14 | 30 = rawTf === 7 || rawTf === 30 ? rawTf : 14;
+      const categoryFilter = (['All', 'Ustki kiyim', 'Oyoq kiyim', 'Aksessuarlar'].includes(
+        req.body?.categoryFilter
+      )
+        ? req.body.categoryFilter
+        : 'All') as 'All' | ProductCategory;
+
+      try {
+        const forecast = await generateDemandForecastWithGemini({
+          shopName: shop.name,
+          todaySales: shop.todaySales,
+          timeframe,
+          categoryFilter,
+          inventory: shop.inventory,
+          orders: shop.orders || [],
+        });
+        res.json({ forecast });
+      } catch (err: unknown) {
+        if (err instanceof AiServiceError) {
+          res.status(err.statusCode).json({ error: err.message, code: err.code });
+          return;
+        }
+        res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  );
+
+  app.post(
+    '/api/shops/:shopId/inventory/import',
+    requireShopAccess,
+    async (req: AuthenticatedRequest, res: Response) => {
+      const db = loadDatabase();
+      const shop = db.shops.find((s) => s.id === req.params.shopId);
+      if (!shop) {
+        res.status(404).json({ error: 'Shop not found' });
+        return;
+      }
+
+      const incoming =
+        Array.isArray(req.body?.items) && req.body.items.length > 0
+          ? req.body.items
+          : SAMPLE_AI_IMPORT_PRODUCTS;
+
+      const addedItems: InventoryItem[] = [];
+      for (const raw of incoming) {
+        const nameUz = typeof raw?.nameUz === 'string' ? raw.nameUz.trim() : '';
+        const nameEn = typeof raw?.nameEn === 'string' ? raw.nameEn.trim() : nameUz;
+        const baseSku = typeof raw?.sku === 'string' ? raw.sku.trim().toUpperCase() : `SP-IMP-${Date.now()}`;
+        const category: ProductCategory = ['Ustki kiyim', 'Oyoq kiyim', 'Aksessuarlar'].includes(
+          raw?.category
+        )
+          ? raw.category
+          : 'Ustki kiyim';
+        const sizes = typeof raw?.sizes === 'string' ? raw.sizes.trim() : 'M, L, XL';
+        const stock = Number.isFinite(Number(raw?.stock)) ? Math.max(0, Math.floor(Number(raw?.stock))) : 10;
+        const costPrice = Number.isFinite(Number(raw?.costPrice)) && Number(raw?.costPrice) > 0
+          ? Math.round(Number(raw.costPrice))
+          : 250000;
+        const sellPrice = Number.isFinite(Number(raw?.sellPrice)) && Number(raw?.sellPrice) > 0
+          ? Math.round(Number(raw.sellPrice))
+          : 420000;
+
+        if (!nameUz) continue;
+
+        const uniqueSku = shop.inventory.some((i) => i.sku === baseSku)
+          ? `${baseSku}-${Math.floor(10 + Math.random() * 89)}`
+          : baseSku;
+
+        const created: InventoryItem = {
+          id: `prod-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          sku: uniqueSku,
+          nameUz,
+          nameEn,
+          category,
+          sizes,
+          highlightSize: typeof raw?.highlightSize === 'string' ? raw.highlightSize : undefined,
+          stock,
+          costPrice,
+          sellPrice,
+          daysIdle: 0,
+          dailyVelocity: 1.4,
+          recommendedRestock: stock <= 5 ? 15 : 10,
+          keywords: nameUz
+            .toLowerCase()
+            .split(/\s+/)
+            .filter((w: string) => w.length >= 2),
+        };
+        shop.inventory.unshift(created);
+        addedItems.push(created);
+      }
+
+      await saveDatabase();
+      res.json({
+        addedItems,
+        shop: sanitizeShopForClient(shop, getRequestBaseUrl(req)),
+      });
+    }
+  );
+
+  app.post(
+    '/api/shops/:shopId/orders/:orderId/mark-paid',
+    requireShopAccess,
+    async (req: AuthenticatedRequest, res: Response) => {
+      const db = loadDatabase();
+      const shop = db.shops.find((s) => s.id === req.params.shopId);
+      if (!shop) {
+        res.status(404).json({ error: 'Shop not found' });
+        return;
+      }
+      const order = (shop.orders || []).find((o) => o.orderId === req.params.orderId);
+      if (!order) {
+        res.status(404).json({ error: 'Order not found' });
+        return;
+      }
+      order.paymentStatus = 'paid';
+      for (const conv of shop.conversations) {
+        for (const m of conv.messages) {
+          if (m.paymentCard?.orderId === order.orderId || m.orderCreated?.orderId === order.orderId) {
+            if (m.paymentCard) m.paymentCard.status = 'paid';
+            if (conv.tags) {
+              conv.tags = conv.tags.map((tag) =>
+                tag.includes('kutilmoqda') ? `${order.paymentProvider || 'Click'} to'landi` : tag
+              );
+            }
+          }
+        }
+      }
+      await saveDatabase();
+      res.json({ order, shop: sanitizeShopForClient(shop, getRequestBaseUrl(req)) });
+    }
+  );
+
+  app.post(
+    '/api/shops/:shopId/orders/:orderId/dispatch',
+    requireShopAccess,
+    async (req: AuthenticatedRequest, res: Response) => {
+      const db = loadDatabase();
+      const shop = db.shops.find((s) => s.id === req.params.shopId);
+      if (!shop) {
+        res.status(404).json({ error: 'Shop not found' });
+        return;
+      }
+      const order = (shop.orders || []).find((o) => o.orderId === req.params.orderId);
+      if (!order) {
+        res.status(404).json({ error: 'Order not found' });
+        return;
+      }
+      try {
+        const dispatch = await dispatchOrderToYandexOrCourier({ shop, order });
+        order.status = 'dispatched';
+        order.deliveryClaimId = dispatch.claimId;
+        for (const conv of shop.conversations) {
+          for (const m of conv.messages) {
+            if (m.orderCreated?.orderId === order.orderId && m.deliveryPill) {
+              m.deliveryPill.status = 'dispatched';
+              m.deliveryPill.claimId = dispatch.claimId;
+            }
+          }
+        }
+        await saveDatabase();
+        res.json({
+          dispatch,
+          order,
+          shop: sanitizeShopForClient(shop, getRequestBaseUrl(req)),
+        });
+      } catch (err: unknown) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  );
+
+  app.post(
+    '/api/shops/:shopId/orders/:orderId/deliver',
+    requireShopAccess,
+    async (req: AuthenticatedRequest, res: Response) => {
+      const db = loadDatabase();
+      const shop = db.shops.find((s) => s.id === req.params.shopId);
+      if (!shop) {
+        res.status(404).json({ error: 'Shop not found' });
+        return;
+      }
+      const order = (shop.orders || []).find((o) => o.orderId === req.params.orderId);
+      if (!order) {
+        res.status(404).json({ error: 'Order not found' });
+        return;
+      }
+      order.status = 'delivered';
+      order.paymentStatus = 'paid';
+      for (const conv of shop.conversations) {
+        for (const m of conv.messages) {
+          if (m.orderCreated?.orderId === order.orderId) {
+            if (m.deliveryPill) m.deliveryPill.status = 'delivered';
+            if (m.paymentCard) m.paymentCard.status = 'paid';
+          }
+        }
+      }
+      await saveDatabase();
+      res.json({ order, shop: sanitizeShopForClient(shop, getRequestBaseUrl(req)) });
+    }
+  );
+
+  app.post(
+    '/api/shops/:shopId/merchant-config',
+    requireShopAccess,
+    async (req: AuthenticatedRequest, res: Response) => {
+      const db = loadDatabase();
+      const shop = db.shops.find((s) => s.id === req.params.shopId);
+      if (!shop) {
+        res.status(404).json({ error: 'Shop not found' });
+        return;
+      }
+
+      shop.channelSecrets = shop.channelSecrets || {};
+      const body = req.body || {};
+
+      if (body.click) {
+        shop.channelSecrets.click = {
+          serviceId: String(body.click.serviceId || '').trim(),
+          merchantId: String(body.click.merchantId || '').trim(),
+          secretKey:
+            typeof body.click.secretKey === 'string' && body.click.secretKey.trim()
+              ? body.click.secretKey.trim()
+              : shop.channelSecrets.click?.secretKey,
+        };
+      }
+      if (body.payme) {
+        shop.channelSecrets.payme = {
+          merchantId: String(body.payme.merchantId || '').trim(),
+          secretKey:
+            typeof body.payme.secretKey === 'string' && body.payme.secretKey.trim()
+              ? body.payme.secretKey.trim()
+              : shop.channelSecrets.payme?.secretKey,
+        };
+      }
+      if (body.yandex) {
+        shop.channelSecrets.yandex = {
+          pickupAddress: String(body.yandex.pickupAddress || `${shop.branch}, Tashkent`).trim(),
+          senderPhone: String(body.yandex.senderPhone || '+998901234567').trim(),
+          apiToken:
+            typeof body.yandex.apiToken === 'string' && body.yandex.apiToken.trim()
+              ? body.yandex.apiToken.trim()
+              : shop.channelSecrets.yandex?.apiToken,
+        };
+      }
+      if (body.erp) {
+        const rawUrl = String(body.erp.webhookUrl || '').trim();
+        if (rawUrl) {
+          try {
+            assertSafeHttpsWebhookUrl(rawUrl);
+          } catch (err: unknown) {
+            res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid ERP URL' });
+            return;
+          }
+        }
+        const provider = ['BILLZ', 'MoySklad', '1C', 'Webhook'].includes(body.erp.provider)
+          ? body.erp.provider
+          : 'BILLZ';
+        shop.channelSecrets.erp = {
+          provider,
+          webhookUrl: rawUrl,
+          lastSyncAt: shop.channelSecrets.erp?.lastSyncAt,
+          lastSyncStatus: shop.channelSecrets.erp?.lastSyncStatus,
+        };
+        if (rawUrl && shop.ecosystemIntegrations) {
+          shop.ecosystemIntegrations.erpSyncConnected = true;
+        }
+      }
+
+      await saveDatabase();
+      res.json({ shop: sanitizeShopForClient(shop, getRequestBaseUrl(req)) });
+    }
+  );
+
+  app.post(
+    '/api/shops/:shopId/erp/sync',
+    requireShopAccess,
+    async (req: AuthenticatedRequest, res: Response) => {
+      const db = loadDatabase();
+      const shop = db.shops.find((s) => s.id === req.params.shopId);
+      if (!shop) {
+        res.status(404).json({ error: 'Shop not found' });
+        return;
+      }
+      try {
+        const sync = await syncInventoryWithErpWebhook(shop);
+        res.json({ sync, shop: sanitizeShopForClient(shop, getRequestBaseUrl(req)) });
+      } catch (err: unknown) {
+        res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+  );
+
+  app.patch(
+    '/api/shops/:shopId/ecosystem',
+    requireShopAccess,
+    async (req: AuthenticatedRequest, res: Response) => {
+      const db = loadDatabase();
+      const shop = db.shops.find((s) => s.id === req.params.shopId);
+      if (!shop) {
+        res.status(404).json({ error: 'Shop not found' });
+        return;
+      }
+
+      const current: EcosystemIntegrations = shop.ecosystemIntegrations || {
+        instagramConnected: shop.channels?.instagram ?? true,
+        instagramChatsToday: 84,
+        telegramConnected: shop.channels?.telegram ?? true,
+        telegramChatsToday: 64,
+        clickPaymeConnected: true,
+        yandexDeliveryConnected: true,
+        erpSyncConnected: false,
+      };
+
+      const body = (req.body || {}) as Partial<EcosystemIntegrations>;
+      const updated: EcosystemIntegrations = {
+        ...current,
+        ...(typeof body.instagramConnected === 'boolean'
+          ? { instagramConnected: body.instagramConnected }
+          : {}),
+        ...(typeof body.telegramConnected === 'boolean'
+          ? { telegramConnected: body.telegramConnected }
+          : {}),
+        ...(typeof body.clickPaymeConnected === 'boolean'
+          ? { clickPaymeConnected: body.clickPaymeConnected }
+          : {}),
+        ...(typeof body.yandexDeliveryConnected === 'boolean'
+          ? { yandexDeliveryConnected: body.yandexDeliveryConnected }
+          : {}),
+        ...(typeof body.erpSyncConnected === 'boolean'
+          ? { erpSyncConnected: body.erpSyncConnected }
+          : {}),
+      };
+
+      shop.ecosystemIntegrations = updated;
+      shop.channels.instagram = updated.instagramConnected;
+      shop.channels.telegram = updated.telegramConnected;
+      await saveDatabase();
+
+      res.json({
+        shop: sanitizeShopForClient(shop, getRequestBaseUrl(req)),
       });
     }
   );
@@ -693,6 +1396,67 @@ async function startServer() {
     }
   });
 
+  // Click Merchant Callback Endpoint (Prepare / Complete)
+  app.post('/api/webhooks/click/:shopId', async (req: Request, res: Response) => {
+    const db = loadDatabase();
+    const shop = db.shops.find((s) => s.id === req.params.shopId);
+    if (!shop) {
+      res.status(404).json({ error: -5, error_note: 'Shop not found' });
+      return;
+    }
+
+    const secretKey =
+      shop.channelSecrets?.click?.secretKey || process.env.CLICK_SECRET_KEY?.trim();
+    const clickTransId = String(req.body?.click_trans_id || '');
+    const serviceId = String(req.body?.service_id || '');
+    const merchantTransId = String(req.body?.merchant_trans_id || '');
+    const amount = String(req.body?.amount || '');
+    const action = String(req.body?.action || '');
+    const signTime = String(req.body?.sign_time || '');
+    const signString = String(req.body?.sign_string || '');
+
+    if (secretKey) {
+      const expected = crypto
+        .createHash('md5')
+        .update(
+          `${clickTransId}${serviceId}${secretKey}${merchantTransId}${
+            action === '1' ? String(req.body?.merchant_prepare_id || '') : ''
+          }${amount}${action}${signTime}`
+        )
+        .digest('hex');
+      if (!safeEqual(expected.toLowerCase(), signString.toLowerCase())) {
+        res.json({ error: -1, error_note: 'SIGN CHECK FAILED!' });
+        return;
+      }
+    }
+
+    const order = (shop.orders || []).find((o) => o.orderId === merchantTransId);
+    if (!order) {
+      res.json({ error: -5, error_note: 'Order does not exist' });
+      return;
+    }
+
+    if (action === '1') {
+      order.paymentStatus = 'paid';
+      for (const conv of shop.conversations) {
+        for (const m of conv.messages) {
+          if (m.paymentCard?.orderId === order.orderId) {
+            m.paymentCard.status = 'paid';
+          }
+        }
+      }
+      await saveDatabase();
+    }
+
+    res.json({
+      click_trans_id: clickTransId,
+      merchant_trans_id: merchantTransId,
+      merchant_prepare_id: order.orderId,
+      error: 0,
+      error_note: 'Success',
+    });
+  });
+
   // --------------------------------------------------------------------------
   // SUPER ADMIN ROUTES
   // --------------------------------------------------------------------------
@@ -748,6 +1512,15 @@ async function startServer() {
       plan,
       status: 'active',
       channels: { instagram, telegram },
+      ecosystemIntegrations: {
+        instagramConnected: instagram,
+        instagramChatsToday: instagram ? 14 : 0,
+        telegramConnected: telegram,
+        telegramChatsToday: telegram ? 11 : 0,
+        clickPaymeConnected: true,
+        yandexDeliveryConnected: true,
+        erpSyncConnected: false,
+      },
       channelIntegrations: {
         telegram: { connected: false, mode: 'polling', webhookActive: false },
         instagram: { connected: false, verifyToken: `sp_${crypto.randomBytes(6).toString('hex')}` },
@@ -851,6 +1624,8 @@ async function startServer() {
   // --------------------------------------------------------------------------
   // VITE DEV MIDDLEWARE / PRODUCTION STATIC HANDLER
   // --------------------------------------------------------------------------
+  app.use(express.static(path.resolve(process.cwd(), 'public')));
+
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({

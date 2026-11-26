@@ -3,12 +3,18 @@ import {
   AlertCircle,
   ArrowLeft,
   Bot,
+  Car,
   CheckCircle2,
+  CreditCard,
+  ExternalLink,
+  FileAudio,
   Instagram,
   Loader2,
+  Mic,
   Package,
   Send,
   ShoppingBag,
+  Square,
 } from 'lucide-react';
 import { COPY, formatUZS } from '../../i18n';
 import { Conversation, InventoryItem, Language, Platform } from '../../types';
@@ -22,8 +28,26 @@ interface SalesBotTabProps {
   onSendTestMessage: (
     conversationId: string,
     text: string,
-    sendToPlatform?: boolean
+    sendToPlatform?: boolean,
+    options?: { isVoice?: boolean; voiceDuration?: string }
   ) => Promise<void>;
+  onSendVoiceMessage?: (
+    conversationId: string,
+    payload: {
+      audioBase64: string;
+      mimeType: string;
+      duration: string;
+      sendToPlatform?: boolean;
+    }
+  ) => Promise<void>;
+  onMarkOrderPaid?: (orderId: string) => Promise<void>;
+  onDispatchOrder?: (orderId: string) => Promise<void>;
+}
+
+function formatDuration(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = Math.max(1, seconds % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
 }
 
 export const SalesBotTab: React.FC<SalesBotTabProps> = ({
@@ -33,6 +57,9 @@ export const SalesBotTab: React.FC<SalesBotTabProps> = ({
   onSelectConversation,
   inventory,
   onSendTestMessage,
+  onSendVoiceMessage,
+  onMarkOrderPaid,
+  onDispatchOrder,
 }) => {
   const t = COPY[lang].salesBot;
   const [platformFilter, setPlatformFilter] = useState<'all' | Platform>('all');
@@ -41,7 +68,16 @@ export const SalesBotTab: React.FC<SalesBotTabProps> = ({
   const [sendError, setSendError] = useState('');
   const [sendToPlatform, setSendToPlatform] = useState(true);
   const [mobileShowChat, setMobileShowChat] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [busyOrderAction, setBusyOrderAction] = useState<string | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordTimerRef = useRef<number | null>(null);
+  const recordSecondsRef = useRef<number>(0);
 
   const filteredConversations = conversations.filter((c) =>
     platformFilter === 'all' ? true : c.platform === platformFilter
@@ -57,11 +93,21 @@ export const SalesBotTab: React.FC<SalesBotTabProps> = ({
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [activeConv?.messages.length, activeConv?.id, mobileShowChat, isSending]);
 
+  useEffect(() => {
+    return () => {
+      if (recordTimerRef.current) window.clearInterval(recordTimerRef.current);
+      mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+    };
+  }, []);
+
   if (!activeConv || !contextProduct) {
     return null;
   }
 
-  const dispatchMessage = async (text: string) => {
+  const dispatchMessage = async (
+    text: string,
+    options?: { isVoice?: boolean; voiceDuration?: string }
+  ) => {
     if (!text.trim() || isSending) return;
     setSendError('');
     setIsSending(true);
@@ -69,7 +115,8 @@ export const SalesBotTab: React.FC<SalesBotTabProps> = ({
       await onSendTestMessage(
         activeConv.id,
         text.trim(),
-        Boolean(activeConv.externalChatId && sendToPlatform)
+        Boolean(activeConv.externalChatId && sendToPlatform),
+        options
       );
       setDraft('');
     } catch (err: unknown) {
@@ -85,6 +132,116 @@ export const SalesBotTab: React.FC<SalesBotTabProps> = ({
     }
   };
 
+  const sendRecordedAudioBlob = async (blob: Blob, durationSec: number) => {
+    if (!onSendVoiceMessage) return;
+    setSendError('');
+    setIsSending(true);
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = String(reader.result || '');
+          const commaIdx = result.indexOf(',');
+          resolve(commaIdx >= 0 ? result.slice(commaIdx + 1) : result);
+        };
+        reader.onerror = () => reject(new Error('Failed to read audio stream.'));
+        reader.readAsDataURL(blob);
+      });
+      await onSendVoiceMessage(activeConv.id, {
+        audioBase64: base64,
+        mimeType: blob.type || 'audio/webm',
+        duration: formatDuration(durationSec),
+        sendToPlatform: Boolean(activeConv.externalChatId && sendToPlatform),
+      });
+    } catch (err: unknown) {
+      setSendError(
+        err instanceof Error
+          ? err.message
+          : lang === 'uz'
+          ? 'Ovozli xabarni transkripsiya qilishda xatolik'
+          : 'Voice transcription failed'
+      );
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  const handleToggleMicRecording = async () => {
+    if (isSending) return;
+
+    if (isRecording) {
+      if (recordTimerRef.current) {
+        window.clearInterval(recordTimerRef.current);
+        recordTimerRef.current = null;
+      }
+      mediaRecorderRef.current?.stop();
+      setIsRecording(false);
+      return;
+    }
+
+    setSendError('');
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      setSendError(
+        lang === 'uz'
+          ? "Brauzerda mikrofon yozish qo'llab-quvvatlanmaydi. Audio fayl yuklang yoki matn yozing."
+          : 'Microphone recording is not supported in this browser. Upload an audio file instead.'
+      );
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      mediaStreamRef.current = stream;
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
+        : 'audio/mp4';
+      const recorder = new MediaRecorder(stream, { mimeType });
+      mediaRecorderRef.current = recorder;
+      audioChunksRef.current = [];
+      recordSecondsRef.current = 0;
+      setRecordingSeconds(0);
+
+      recorder.ondataavailable = (ev) => {
+        if (ev.data && ev.data.size > 0) {
+          audioChunksRef.current.push(ev.data);
+        }
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop());
+        mediaStreamRef.current = null;
+        const finalBlob = new Blob(audioChunksRef.current, { type: mimeType.split(';')[0] });
+        if (finalBlob.size > 0) {
+          void sendRecordedAudioBlob(finalBlob, recordSecondsRef.current);
+        }
+      };
+
+      recorder.start();
+      setIsRecording(true);
+      recordTimerRef.current = window.setInterval(() => {
+        recordSecondsRef.current += 1;
+        setRecordingSeconds(recordSecondsRef.current);
+        if (recordSecondsRef.current >= 45 && mediaRecorderRef.current?.state === 'recording') {
+          if (recordTimerRef.current) window.clearInterval(recordTimerRef.current);
+          mediaRecorderRef.current.stop();
+          setIsRecording(false);
+        }
+      }, 1000);
+    } catch {
+      setSendError(
+        lang === 'uz'
+          ? 'Mikrofonga ruxsat berilmadi. Brauzer sozlamasidan mikrofonni yoqing yoki audio fayl yuklang.'
+          : 'Microphone permission denied. Allow microphone access or upload an audio file.'
+      );
+    }
+  };
+
+  const handleAudioFileUpload = async (file: File) => {
+    if (isSending) return;
+    await sendRecordedAudioBlob(file, Math.max(3, Math.round(file.size / 16000)));
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     void dispatchMessage(draft);
@@ -94,8 +251,16 @@ export const SalesBotTab: React.FC<SalesBotTabProps> = ({
     void dispatchMessage(chipText);
   };
 
+  const handleSimulatedVoice = () => {
+    const productHint =
+      contextProduct.id === 'prod-krossovka'
+        ? "Assalomu alaykum brat, krossovka 42 razmer bormi? Chilonzorga dastavka nechi pul bo'ladi?"
+        : `Assalomu alaykum brat, ${contextProduct.nameUz.toLowerCase()} nalichida bormi, Chilonzorga dastavka nechi pul bo'ladi?`;
+    void dispatchMessage(productHint, { isVoice: true, voiceDuration: '0:05' });
+  };
+
   return (
-    <div className="grid h-[calc(100dvh-9.5rem)] min-h-[520px] lg:h-[calc(100vh-11rem)] lg:min-h-[600px] grid-cols-1 overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 lg:grid-cols-12">
+    <div className="grid h-[calc(100dvh-9.5rem)] min-h-[540px] lg:h-[calc(100vh-11rem)] lg:min-h-[600px] grid-cols-1 overflow-hidden rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 lg:grid-cols-12">
       {/* Left Column: Unified Conversations Inbox (master list on mobile) */}
       <div
         className={`${
@@ -189,7 +354,7 @@ export const SalesBotTab: React.FC<SalesBotTabProps> = ({
                   {lastMsg?.text}
                 </p>
 
-                <div className="mt-2.5 flex items-center justify-between">
+                <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                   <span
                     className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-semibold border ${
                       isConfirmed
@@ -204,6 +369,12 @@ export const SalesBotTab: React.FC<SalesBotTabProps> = ({
                     )}
                     {t.statusLabels[conv.status]}
                   </span>
+
+                  {conv.tags && conv.tags.length > 0 && (
+                    <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400 truncate">
+                      {conv.tags.slice(0, 3).join(' · ')}
+                    </span>
+                  )}
                 </div>
               </button>
             );
@@ -314,10 +485,180 @@ export const SalesBotTab: React.FC<SalesBotTabProps> = ({
                       : 'bg-indigo-600 text-white'
                   }`}
                 >
-                  {msg.text}
+                  {/* Simulated Voice Message Pill + AI Transcription */}
+                  {msg.isVoice && (
+                    <div className="mb-2 rounded-lg bg-indigo-700/80 border border-indigo-400/40 px-3 py-2 text-xs text-white">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="inline-flex items-center gap-1.5 font-semibold">
+                          <Mic className="h-3.5 w-3.5" />
+                          <span>
+                            {lang === 'uz' ? 'Ovozli xabar' : 'Voice message'} ({msg.voiceDuration || '0:06'})
+                          </span>
+                        </span>
+                        <span className="rounded bg-white/15 px-1.5 py-0.5 text-[10px] font-semibold">
+                          {lang === 'uz' ? 'AI Transkripsiya' : 'AI Transcript'}
+                        </span>
+                      </div>
+                      <div className="mt-1.5 flex items-center gap-1 opacity-80" aria-hidden="true">
+                        {[10, 18, 12, 22, 16, 24, 14, 20, 11, 17, 13, 19, 10, 15, 9].map((h, idx) => (
+                          <span
+                            key={idx}
+                            className="w-1 rounded-full bg-white/80"
+                            style={{ height: `${Math.max(4, Math.round(h * 0.55))}px` }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {msg.isVoice ? (
+                    <p className="text-sm leading-relaxed">“{msg.voiceTranscript || msg.text}”</p>
+                  ) : (
+                    msg.text
+                  )}
+
+                  {/* Click / Payme In-Chat Payment Card */}
+                  {msg.paymentCard && (
+                    <div
+                      className={`mt-3 rounded-lg border p-3 text-xs text-slate-800 dark:text-slate-100 ${
+                        msg.paymentCard.status === 'paid'
+                          ? 'border-emerald-200 dark:border-emerald-800 bg-emerald-50/90 dark:bg-emerald-950/60'
+                          : 'border-amber-200 dark:border-amber-800 bg-amber-50/90 dark:bg-amber-950/50'
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-1.5 font-semibold text-slate-900 dark:text-white">
+                          <CreditCard className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                          <span>
+                            {lang === 'uz' ? "To'lov:" : 'Payment:'}{' '}
+                            <span className="font-mono-num">
+                              {formatUZS(msg.paymentCard.amount, lang)}
+                            </span>
+                          </span>
+                        </span>
+                        <span
+                          className={`inline-flex items-center gap-1 font-semibold ${
+                            msg.paymentCard.status === 'paid'
+                              ? 'text-emerald-700 dark:text-emerald-300'
+                              : 'text-amber-800 dark:text-amber-300'
+                          }`}
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          <span>
+                            {msg.paymentCard.provider}{' '}
+                            {msg.paymentCard.status === 'paid'
+                              ? lang === 'uz'
+                                ? "orqali to'landi"
+                                : 'Paid'
+                              : lang === 'uz'
+                              ? 'kutilmoqda'
+                              : 'Pending'}
+                          </span>
+                        </span>
+                      </div>
+
+                      {msg.paymentCard.status === 'pending' && (
+                        <div className="mt-2.5 flex flex-wrap items-center gap-2 border-t border-amber-200/70 dark:border-amber-800/70 pt-2">
+                          {msg.paymentCard.paymentUrl &&
+                            msg.paymentCard.paymentUrl.startsWith('https://') && (
+                              <a
+                                href={msg.paymentCard.paymentUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 rounded-md bg-indigo-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-indigo-700"
+                              >
+                                <span>
+                                  {msg.paymentCard.provider}{' '}
+                                  {lang === 'uz' ? "orqali to'lash" : 'Pay Now'}
+                                </span>
+                                <ExternalLink className="h-3 w-3" />
+                              </a>
+                            )}
+                          {msg.paymentCard.orderId && onMarkOrderPaid && (
+                            <button
+                              type="button"
+                              disabled={busyOrderAction === `pay-${msg.paymentCard.orderId}`}
+                              onClick={async () => {
+                                if (!msg.paymentCard?.orderId) return;
+                                setBusyOrderAction(`pay-${msg.paymentCard.orderId}`);
+                                try {
+                                  await onMarkOrderPaid(msg.paymentCard.orderId);
+                                } finally {
+                                  setBusyOrderAction(null);
+                                }
+                              }}
+                              className="inline-flex items-center gap-1 rounded-md border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-900 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 dark:text-emerald-300 hover:bg-emerald-50 dark:hover:bg-emerald-950/60 cursor-pointer disabled:opacity-50"
+                            >
+                              {busyOrderAction === `pay-${msg.paymentCard.orderId}` ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <CheckCircle2 className="h-3 w-3" />
+                              )}
+                              <span>
+                                {lang === 'uz' ? "To'lovni tasdiqlash" : 'Mark Paid'}
+                              </span>
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Yandex Delivery Status Pill */}
+                  {msg.deliveryPill && (
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 dark:border-amber-800/80 bg-amber-50/80 dark:bg-amber-950/40 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
+                      <span className="inline-flex items-center gap-1.5 font-semibold">
+                        <Car className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                        <span>
+                          {msg.deliveryPill.status === 'delivered'
+                            ? lang === 'uz'
+                              ? 'Yetkazib berildi'
+                              : 'Delivered'
+                            : msg.deliveryPill.status === 'dispatched'
+                            ? lang === 'uz'
+                              ? `Yandex Kuryer yo‘lda (${msg.deliveryPill.claimId || 'active'}) • ${msg.deliveryPill.etaMinutes} daq`
+                              : `Courier dispatched (${msg.deliveryPill.claimId || 'active'}) • ${msg.deliveryPill.etaMinutes} min`
+                            : lang === 'uz'
+                            ? `Yetkazish tayyor • ~${msg.deliveryPill.etaMinutes} daqiqa`
+                            : `Ready for dispatch • ~${msg.deliveryPill.etaMinutes} min`}
+                        </span>
+                      </span>
+                      <div className="flex items-center gap-2">
+                        {msg.deliveryPill.address && (
+                          <span className="text-[11px] font-medium text-amber-800 dark:text-amber-300">
+                            {msg.deliveryPill.address}
+                          </span>
+                        )}
+                        {msg.orderCreated?.orderId &&
+                          msg.deliveryPill.status !== 'dispatched' &&
+                          msg.deliveryPill.status !== 'delivered' &&
+                          onDispatchOrder && (
+                            <button
+                              type="button"
+                              disabled={busyOrderAction === `disp-${msg.orderCreated.orderId}`}
+                              onClick={async () => {
+                                if (!msg.orderCreated?.orderId) return;
+                                setBusyOrderAction(`disp-${msg.orderCreated.orderId}`);
+                                try {
+                                  await onDispatchOrder(msg.orderCreated.orderId);
+                                } finally {
+                                  setBusyOrderAction(null);
+                                }
+                              }}
+                              className="inline-flex items-center gap-1 rounded bg-amber-600 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-amber-700 cursor-pointer disabled:opacity-50"
+                            >
+                              {busyOrderAction === `disp-${msg.orderCreated.orderId}` && (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              )}
+                              <span>{lang === 'uz' ? 'Kuryer chaqirish' : 'Dispatch'}</span>
+                            </button>
+                          )}
+                      </div>
+                    </div>
+                  )}
 
                   {msg.orderCreated && (
-                    <div className="mt-3 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/60 p-3 text-xs text-slate-800 dark:text-slate-100">
+                    <div className="mt-2.5 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/60 p-3 text-xs text-slate-800 dark:text-slate-100">
                       <div className="flex items-center justify-between gap-2 font-semibold text-emerald-800 dark:text-emerald-300">
                         <span className="inline-flex items-center gap-1.5">
                           <ShoppingBag className="h-3.5 w-3.5" />
@@ -397,18 +738,82 @@ export const SalesBotTab: React.FC<SalesBotTabProps> = ({
             ))}
           </div>
 
-          <form onSubmit={handleSubmit} className="flex items-center gap-2">
+          <form onSubmit={handleSubmit} className="flex flex-wrap sm:flex-nowrap items-center gap-2">
+            <button
+              type="button"
+              disabled={isSending}
+              onClick={() => void handleToggleMicRecording()}
+              title={
+                lang === 'uz'
+                  ? 'Mikrofondan haqiqiy ovozli xabar yozish (Gemini transkripsiya)'
+                  : 'Record real voice message via microphone'
+              }
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2.5 text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap shrink-0 disabled:opacity-50 ${
+                isRecording
+                  ? 'border-rose-500 bg-rose-600 text-white animate-pulse'
+                  : 'border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/60'
+              }`}
+            >
+              {isRecording ? (
+                <>
+                  <Square className="h-3.5 w-3.5 fill-current shrink-0" />
+                  <span className="font-mono-num">
+                    {lang === 'uz' ? 'Yuborish' : 'Stop'} · {formatDuration(recordingSeconds)}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <Mic className="h-4 w-4 shrink-0" />
+                  <span className="hidden sm:inline">
+                    {lang === 'uz' ? 'Ovoz yozish' : 'Record Voice'}
+                  </span>
+                </>
+              )}
+            </button>
+
+            <label
+              title={
+                lang === 'uz'
+                  ? 'Audio fayl yuklash (.mp3, .ogg, .wav)'
+                  : 'Upload audio file (.mp3, .ogg, .wav)'
+              }
+              className={`inline-flex items-center justify-center rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 p-2.5 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer shrink-0 ${
+                isSending || isRecording ? 'opacity-50 pointer-events-none' : ''
+              }`}
+            >
+              <FileAudio className="h-4 w-4" />
+              <input
+                type="file"
+                accept="audio/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  if (file) void handleAudioFileUpload(file);
+                }}
+              />
+            </label>
+
             <input
               type="text"
               value={draft}
-              disabled={isSending}
+              disabled={isSending || isRecording}
               onChange={(e) => setDraft(e.target.value)}
               placeholder={t.inputPlaceholder}
-              className="flex-1 min-w-0 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-3 py-2.5 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-600/20 disabled:opacity-60"
+              className="flex-1 min-w-[140px] rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 px-3 py-2.5 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-600/20 disabled:opacity-60"
             />
             <button
+              type="button"
+              disabled={isSending || isRecording}
+              onClick={handleSimulatedVoice}
+              title={lang === 'uz' ? 'Tezkor namuna ovoz xabari' : 'Quick sample voice prompt'}
+              className="hidden md:inline-flex items-center rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2.5 py-2.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-50 cursor-pointer whitespace-nowrap shrink-0"
+            >
+              {lang === 'uz' ? 'Namuna' : 'Sample'}
+            </button>
+            <button
               type="submit"
-              disabled={!draft.trim() || isSending}
+              disabled={!draft.trim() || isSending || isRecording}
               className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 sm:px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer whitespace-nowrap shrink-0"
             >
               <span className="hidden sm:inline">{t.sendBtn}</span>

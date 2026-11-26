@@ -2,13 +2,18 @@ import type {
   AdminAuthStatus,
   AuthSession,
   ChatMessage,
+  DeadStockMarketingPlan,
+  EcosystemIntegrations,
+  ForecastAnalysisResult,
   InventoryItem,
   Language,
+  OwnerDirectorAnswer,
   PlanTier,
   ProductCategory,
   ShopOrder,
   ShopStatus,
   ShopWorkspace,
+  SmartParsedProduct,
 } from '../types';
 
 export class ApiError extends Error {
@@ -71,6 +76,20 @@ export const api = {
     return apiFetch('/api/public/shops');
   },
 
+  askPublicAssistant(payload: {
+    question: string;
+    lang: Language;
+  }): Promise<{
+    replyText: string;
+    includeContact: boolean;
+    suggestedRoute?: 'inventory' | 'sales-bot' | 'login';
+  }> {
+    return apiFetch('/api/public/assistant', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
   getAdminAuthStatus(): Promise<AdminAuthStatus> {
     return apiFetch('/api/auth/admin-status');
   },
@@ -110,11 +129,54 @@ export const api = {
   sendBotMessage(
     shopId: string,
     convId: string,
-    payload: { text: string; lang: Language; sendToPlatform?: boolean },
+    payload: {
+      text: string;
+      lang: Language;
+      sendToPlatform?: boolean;
+      isVoice?: boolean;
+      voiceDuration?: string;
+    },
     token: string
   ): Promise<{ shop: ShopWorkspace; aiMessage: ChatMessage; order?: ShopOrder }> {
     return apiFetch(
       `/api/shops/${encodeURIComponent(shopId)}/conversations/${encodeURIComponent(convId)}/reply`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+      token
+    );
+  },
+
+  sendBotVoice(
+    shopId: string,
+    convId: string,
+    payload: {
+      audioBase64: string;
+      mimeType: string;
+      duration: string;
+      lang: Language;
+      sendToPlatform?: boolean;
+    },
+    token: string
+  ): Promise<{ transcript: string; shop: ShopWorkspace; aiMessage: ChatMessage; order?: ShopOrder }> {
+    return apiFetch(
+      `/api/shops/${encodeURIComponent(shopId)}/conversations/${encodeURIComponent(convId)}/voice`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+      token
+    );
+  },
+
+  askOwnerDirector(
+    shopId: string,
+    payload: { question: string; lang: Language },
+    token: string
+  ): Promise<{ answer: OwnerDirectorAnswer }> {
+    return apiFetch(
+      `/api/shops/${encodeURIComponent(shopId)}/owner-assistant`,
       {
         method: 'POST',
         body: JSON.stringify(payload),
@@ -147,11 +209,91 @@ export const api = {
     );
   },
 
+  smartParseInventory(
+    shopId: string,
+    payload: {
+      fileName: string;
+      mimeType: string;
+      fileBase64?: string;
+      textContent?: string;
+    },
+    token: string
+  ): Promise<{ items: SmartParsedProduct[] }> {
+    return apiFetch(
+      `/api/shops/${encodeURIComponent(shopId)}/inventory/smart-parse`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+      token
+    );
+  },
+
+  smartImportProducts(
+    shopId: string,
+    items: Array<
+      Omit<InventoryItem, 'id' | 'daysIdle' | 'dailyVelocity' | 'recommendedRestock' | 'keywords'>
+    > | undefined,
+    token: string
+  ): Promise<{ addedItems: InventoryItem[]; shop: ShopWorkspace }> {
+    return apiFetch(
+      `/api/shops/${encodeURIComponent(shopId)}/inventory/import`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ items }),
+      },
+      token
+    );
+  },
+
+  restockInventory(
+    shopId: string,
+    items: Array<{ itemId: string; addQty: number }>,
+    token: string
+  ): Promise<{ totalUnitsAdded: number; shop: ShopWorkspace }> {
+    return apiFetch(
+      `/api/shops/${encodeURIComponent(shopId)}/inventory/restock`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ items }),
+      },
+      token
+    );
+  },
+
+  analyzeForecast(
+    shopId: string,
+    payload: { timeframe: 7 | 14 | 30; categoryFilter: 'All' | ProductCategory },
+    token: string
+  ): Promise<{ forecast: ForecastAnalysisResult }> {
+    return apiFetch(
+      `/api/shops/${encodeURIComponent(shopId)}/forecast/analyze`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+      token
+    );
+  },
+
+  generateAiMarketing(
+    shopId: string,
+    itemId: string,
+    token: string
+  ): Promise<{ plan: DeadStockMarketingPlan }> {
+    return apiFetch(
+      `/api/shops/${encodeURIComponent(shopId)}/inventory/${encodeURIComponent(itemId)}/ai-marketing`,
+      { method: 'POST' },
+      token
+    );
+  },
+
   applyDiscount(
     shopId: string,
     itemId: string,
     newPrice: number,
-    token: string
+    token: string,
+    promoText?: string
   ): Promise<{
     shop: ShopWorkspace;
     broadcast: { sent: boolean; channel?: string; reason?: string };
@@ -160,7 +302,93 @@ export const api = {
       `/api/shops/${encodeURIComponent(shopId)}/inventory/${encodeURIComponent(itemId)}/discount`,
       {
         method: 'POST',
-        body: JSON.stringify({ newPrice }),
+        body: JSON.stringify({ newPrice, promoText }),
+      },
+      token
+    );
+  },
+
+  markOrderPaid(
+    shopId: string,
+    orderId: string,
+    token: string
+  ): Promise<{ order: ShopOrder; shop: ShopWorkspace }> {
+    return apiFetch(
+      `/api/shops/${encodeURIComponent(shopId)}/orders/${encodeURIComponent(orderId)}/mark-paid`,
+      { method: 'POST' },
+      token
+    );
+  },
+
+  dispatchOrder(
+    shopId: string,
+    orderId: string,
+    token: string
+  ): Promise<{
+    dispatch: { mode: string; claimId: string; note: string };
+    order: ShopOrder;
+    shop: ShopWorkspace;
+  }> {
+    return apiFetch(
+      `/api/shops/${encodeURIComponent(shopId)}/orders/${encodeURIComponent(orderId)}/dispatch`,
+      { method: 'POST' },
+      token
+    );
+  },
+
+  deliverOrder(
+    shopId: string,
+    orderId: string,
+    token: string
+  ): Promise<{ order: ShopOrder; shop: ShopWorkspace }> {
+    return apiFetch(
+      `/api/shops/${encodeURIComponent(shopId)}/orders/${encodeURIComponent(orderId)}/deliver`,
+      { method: 'POST' },
+      token
+    );
+  },
+
+  saveMerchantConfig(
+    shopId: string,
+    payload: {
+      click?: { serviceId: string; merchantId: string; secretKey?: string };
+      payme?: { merchantId: string; secretKey?: string };
+      yandex?: { pickupAddress: string; senderPhone: string; apiToken?: string };
+      erp?: { provider: 'BILLZ' | 'MoySklad' | '1C' | 'Webhook'; webhookUrl: string };
+    },
+    token: string
+  ): Promise<{ shop: ShopWorkspace }> {
+    return apiFetch(
+      `/api/shops/${encodeURIComponent(shopId)}/merchant-config`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+      token
+    );
+  },
+
+  syncErpWebhook(
+    shopId: string,
+    token: string
+  ): Promise<{ sync: { syncedAt: string; status: string }; shop: ShopWorkspace }> {
+    return apiFetch(
+      `/api/shops/${encodeURIComponent(shopId)}/erp/sync`,
+      { method: 'POST' },
+      token
+    );
+  },
+
+  updateEcosystem(
+    shopId: string,
+    payload: Partial<EcosystemIntegrations>,
+    token: string
+  ): Promise<{ shop: ShopWorkspace }> {
+    return apiFetch(
+      `/api/shops/${encodeURIComponent(shopId)}/ecosystem`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
       },
       token
     );
