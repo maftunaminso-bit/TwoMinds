@@ -15,6 +15,7 @@ import {
 import { INITIAL_INVENTORY } from '../data/initialData';
 import { COPY, formatUZS } from '../i18n';
 import { DashboardTab, InventoryItem, Language } from '../types';
+import { SavdoPilotLogo } from './SavdoPilotLogo';
 
 interface LandingPageProps {
   lang: Language;
@@ -68,14 +69,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           {/* Zone 1: Brand Wordmark */}
           <a
             href="#top"
-            className="flex items-center gap-2 sm:gap-2.5 whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 rounded-md"
+            className="flex items-center whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 rounded-md"
           >
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white font-display font-bold text-sm">
-              SP
-            </div>
-            <span className="font-display text-base sm:text-lg font-bold tracking-tight text-slate-900">
-              SavdoPilot
-            </span>
+            <SavdoPilotLogo size="md" tone="dark" />
           </a>
 
           {/* Zone 2: Clean Single-Line Nav Links */}
@@ -654,14 +650,12 @@ export const LandingPage: React.FC<LandingPageProps> = ({
       <footer className="border-t border-slate-200 bg-white">
         <div className="mx-auto flex max-w-7xl flex-col items-start justify-between gap-4 px-4 py-8 sm:flex-row sm:items-center sm:px-6 lg:px-8">
           <div>
-            <div className="flex items-center gap-2">
-              <span className="font-display text-base font-bold text-slate-900">
-                SavdoPilot
-              </span>
+            <div className="flex items-center gap-2.5">
+              <SavdoPilotLogo size="sm" tone="dark" />
               <span className="text-slate-300" aria-hidden="true">·</span>
               <span className="text-xs text-slate-500">{t.footer.location}</span>
             </div>
-            <p className="mt-1 text-xs text-slate-500">{t.footer.tagline}</p>
+            <p className="mt-1.5 text-xs text-slate-500">{t.footer.tagline}</p>
           </div>
           <div className="flex flex-col items-start gap-2 sm:items-end">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">

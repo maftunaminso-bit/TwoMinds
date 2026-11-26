@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { COPY } from '../i18n';
 import { DashboardTab, Language, PlanTier, ThemeMode } from '../types';
+import { SavdoPilotLogo } from './SavdoPilotLogo';
 import { UserProfileMenu } from './UserProfileMenu';
 
 interface DashboardLayoutProps {
@@ -85,14 +86,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
       <div>
         {/* Brand */}
         <div className="flex items-center justify-between px-2 pb-5 border-b border-slate-800">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 text-white font-display font-bold text-sm">
-              SP
-            </div>
-            <span className="font-display text-lg font-bold tracking-tight text-white">
-              SavdoPilot
-            </span>
-          </div>
+          <SavdoPilotLogo size="md" tone="light" />
           <button
             type="button"
             onClick={() => setMobileMenuOpen(false)}

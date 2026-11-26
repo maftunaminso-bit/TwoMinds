@@ -15,6 +15,7 @@ import {
 import { formatUZS } from '../i18n';
 import { AdminAuthStatus, AuthSession, Language, ShopWorkspace } from '../types';
 import { api, type PublicShopSummary } from '../utils/api';
+import { SavdoPilotLogo } from './SavdoPilotLogo';
 
 interface LoginPageProps {
   lang: Language;
@@ -165,14 +166,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
             </span>
           </button>
 
-          <div className="flex items-center gap-2">
-            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-600 text-white font-display font-bold text-xs shrink-0">
-              SP
-            </div>
-            <span className="font-display text-sm sm:text-base font-bold text-slate-900">
-              SavdoPilot
-            </span>
-          </div>
+          <SavdoPilotLogo size="sm" tone="dark" />
 
           <div
             className="flex items-center rounded-lg border border-slate-200 bg-slate-100 p-0.5"

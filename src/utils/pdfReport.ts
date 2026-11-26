@@ -30,10 +30,23 @@ export function generateShopPdfReport(
   doc.setFillColor(15, 23, 42); // #0F172A Deep Slate
   doc.rect(0, 0, pageWidth, 34, 'F');
 
+  // Refined Vector Logo Emblem in PDF Header
+  doc.setFillColor(79, 70, 229); // #4F46E5 Indigo
+  doc.roundedRect(14, 6.2, 9.4, 9.4, 2.4, 2.4, 'F');
+  doc.setDrawColor(165, 180, 252);
+  doc.setLineWidth(0.25);
+  doc.roundedRect(14.3, 6.5, 8.8, 8.8, 2.1, 2.1, 'S');
+  // Clean white S-ribbon bars + emerald growth bar
+  doc.setFillColor(255, 255, 255);
+  doc.roundedRect(16.1, 8.2, 5.2, 1.4, 0.5, 0.5, 'F');
+  doc.roundedRect(16.1, 10.2, 5.2, 1.4, 0.5, 0.5, 'F');
+  doc.setFillColor(110, 231, 183); // #6EE7B7 Mint Emerald
+  doc.roundedRect(16.1, 12.2, 3.8, 1.4, 0.5, 0.5, 'F');
+
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(18);
-  doc.text('SavdoPilot', 14, 14);
+  doc.text('SavdoPilot', 26.2, 13.5);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(10);

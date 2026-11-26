@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Bot,
   Copy,
   Check,
   Mail,
@@ -10,6 +9,7 @@ import {
   X,
 } from 'lucide-react';
 import { AppView, DashboardTab, Language } from '../types';
+import { SavdoPilotLogo } from './SavdoPilotLogo';
 
 interface SupportChatbotProps {
   lang: Language;
@@ -177,9 +177,7 @@ export const SupportChatbot: React.FC<SupportChatbotProps> = ({
           {/* Header */}
           <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 bg-[#0F172A] px-4 py-3 text-white">
             <div className="flex items-center gap-2.5">
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600">
-                <Bot className="h-4 w-4 text-white" />
-              </div>
+              <SavdoPilotLogo size="md" showWordmark={false} />
               <div>
                 <p className="font-display text-sm font-bold leading-tight">
                   SavdoPilot Yordamchi

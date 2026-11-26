@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { formatUZS } from '../i18n';
 import { Language, PlanTier, ShopWorkspace, ThemeMode } from '../types';
+import { SavdoPilotLogo } from './SavdoPilotLogo';
 import { UserProfileMenu } from './UserProfileMenu';
 
 interface AdminPageProps {
@@ -149,14 +150,7 @@ export const AdminPage: React.FC<AdminPageProps> = ({
     <div className="flex h-full flex-col justify-between bg-[#0F172A] dark:bg-slate-950 dark:border-r dark:border-slate-800 px-4 py-5 text-slate-200">
       <div>
         <div className="flex items-center justify-between border-b border-slate-800 px-2 pb-5">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-600 font-display text-sm font-bold text-white">
-              SP
-            </div>
-            <span className="font-display text-lg font-bold tracking-tight text-white">
-              SavdoPilot
-            </span>
-          </div>
+          <SavdoPilotLogo size="md" tone="light" />
           <button
             type="button"
             onClick={() => setMobileMenuOpen(false)}
